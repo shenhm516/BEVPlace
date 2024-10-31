@@ -14,6 +14,7 @@ from scipy.spatial import ConvexHull
 from shapely.geometry import Polygon
 from skimage.metrics import structural_similarity as ssim
 import re
+import skimage
 
 # kitti_seq_split_points = {"00":3000, "02":3400, "05":1000, "06":600, '08':1000}
 
@@ -32,6 +33,8 @@ class InferDataset(data.Dataset):
         imgs_p = sorted(imgs_p, key=extract_number)
         self.imgs_path = [dataset_path+dataset+seq+'/bev_imgs/'+i for i in imgs_p]
         self.hulls = []
+        self.points = []
+        # self.covs = []
         # gt_hull
         with open(dataset_path+dataset+'hull/'+seq+'.txt', 'r') as file:
             for line in file:
@@ -41,7 +44,11 @@ class InferDataset(data.Dataset):
                 vertices = [(points[v][0], points[v][1]) for v in hull.vertices]
                 polygon = Polygon(vertices)
                 self.hulls.append(polygon)
-
+                self.points.append(points)
+        # with open(dataset_path+dataset+'cov/'+seq+'.txt', 'r') as file:
+        #     for line in file:
+        #         cov = line.strip().split(',')
+        #         self.covs.append(cov)
 
     def __getitem__(self, index):
         img = cv2.imread(self.imgs_path[index], 0)
@@ -57,6 +64,58 @@ class InferDataset(data.Dataset):
     def __len__(self):
         return len(self.imgs_path)
 
+
+def get_iou_2polys(gt_info_list, det_info_list, h, w): 
+    '''
+    get the iou of 2 polys
+    '''
+    mask1 = np.zeros((h, w), np.uint8) 
+    mask2 = np.zeros((h, w), np.uint8) 
+    # cv2.imwrite("mask.jpg", mask) 
+
+    for gt_pt_info in gt_info_list:
+        gt_pt = (gt_pt_info["points"] * 150 / 30 + 150).astype(np.int32)
+        # print(gt_pt)
+        # if gt_pt[:, 1] < h and gt_pt[:, 0]<w:
+        mask1[gt_pt[:, 1],gt_pt[:, 0]] = 100
+        # cv2.fillPoly(mask1, [gt_pt], 128)
+    
+    for det_pt_info in det_info_list:
+        det_pt = (det_pt_info["points"] * 150 / 30 + 150).astype(np.int32)
+        # if det_pt[:, 1] < h and det_pt[:, 0]<w:
+        mask2[det_pt[:, 1],det_pt[:, 0]] = 100
+        # cv2.fillPoly(mask2, [det_pt], 128)
+
+    kernel_size = 10
+    kernel = skimage.morphology.disk(kernel_size)
+    mask1 = cv2.morphologyEx(mask1, cv2.MORPH_CLOSE, kernel)
+    mask2 = cv2.morphologyEx(mask2, cv2.MORPH_CLOSE, kernel)
+    
+    # cv2.imshow('mask1',mask1)
+    # cv2.imshow('mask2',mask2)
+    # cv2.waitKey(0)
+    ## method 1
+    mask = mask1 + mask2
+    # cv2.imshow('mask',mask)
+    # cv2.waitKey(0)
+    inter,_ = np.where(mask==200)
+    # inter = (mask==200).sum()
+    y1, _ = np.where(mask1==100)
+    y2, _ = np.where(mask2==100)
+    # print(len(inter), (mask==200).sum())
+    # union = len(y1)
+    iou = len(inter) / (len(y1) + 1e-6)
+    # print('iou',iou)
+    # cv2.waitKey(0)
+    # print(inter, len(y1), len(y2), union, iou)
+    ## method 2
+    # inter1_map = cv2.bitwise_and(mask1, mask2)
+    # union1_map = cv2.bitwise_or(mask1, mask2)
+    # inter1 = np.sum(inter1_map==1)
+    # union1 = np.sum(union1_map==1)
+    # iou1 = inter1 / (union1 + 1e-6)
+    # print('===+++', iou, iou1)
+    return iou
 
 def evaluateResults(global_descs, dataset, match_results_save_path=None):
     gt_thres = 4  # gt threshold
@@ -76,15 +135,30 @@ def evaluateResults(global_descs, dataset, match_results_save_path=None):
         for i in range(len(pred)):
             query_idx = eval_start_split_point+q_idx
             overlap_area = np.empty([0,1])
-            for hull in dataset.hulls[:int(len(global_descs)*0.65)]:
-            # for hull in dataset.hulls:
-                area = dataset.hulls[query_idx].intersection(hull).area
-                overlap_area = np.vstack([overlap_area, area])
-            positives = np.copy(overlap_area)
-            # print(positives)
-            # print(np.where(overlap_area > gt_thres))
+            
+            for points in dataset.points[:int(len(global_descs)*0.65)]:
+                    # query_info_list = [{"points": np.array(datasets[i].points[query_idx])}]
+                    # database_info_list = [{"points": np.array(points)}]
+                    p_dis = np.linalg.norm(np.mean(dataset.points[query_idx],axis=0) - np.mean(points,axis=0))
+                    if p_dis <=5:
+                        mean_query = np.mean(dataset.points[query_idx],axis=0)
+                        query_info_list = [{"points": dataset.points[query_idx]-mean_query}]
+                        database_info_list = [{"points": points-mean_query}]
+                        iou = get_iou_2polys(database_info_list, query_info_list, 300, 300)
+                    else: iou = 0
+                    overlap_area = np.vstack([overlap_area, iou])
             # print(overlap_area)
-            positives = np.where(overlap_area > gt_thres)[0]
+            positives = np.copy(overlap_area)
+            positives = np.where(overlap_area > 0.0)[0]
+            # for hull in dataset.hulls[:int(len(global_descs)*0.65)]:
+            # # for hull in dataset.hulls:
+            #     area = dataset.hulls[query_idx].intersection(hull).area
+            #     overlap_area = np.vstack([overlap_area, area])
+            # positives = np.copy(ovquery_info_listerlap_area)
+            # # print(positives)
+            # # print(np.where(overlap_area > gt_thres))
+            # # print(overlap_area)
+            # positives = np.where(overlap_area > gt_thres)[0]
 
             descs_dist = np.linalg.norm(global_descs[query_idx] - global_descs[pred[i]])
             # print(descs_dist)
@@ -94,17 +168,132 @@ def evaluateResults(global_descs, dataset, match_results_save_path=None):
                 real_loop.append(1)
                 if pred[i] in positives:# and flag_tp==False:
                     tp += 1
-                    # print('0', np.linalg.norm(global_descs[query_idx] - global_descs[pred[i]]))
+                # else: 
+                #     mean_query = np.mean(dataset.points[query_idx],axis=0)
+                #     query_info_list = [{"points": dataset.points[query_idx]-mean_query}]
+                #     database_info_list = [{"points": dataset.points[pred[i]]-mean_query}]
+                #     iou = get_iou_2polys(database_info_list, query_info_list, 300, 300)
+                #     print('0', iou)
             else:
                 real_loop.append(0)
             detected_loop.append(-descs_dist)
-    # print(all_positives)
+    print(all_positives)
     if all_positives != 0:
         recall_top1 = tp / all_positives #tp/(tp+fp)
     else: 
         recall_top1 = 1000
     precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
     return recall, precision, recall_top1
+
+def evaluateResultsPR(global_descs, datasets):
+    gt_thres = 4  # gt threshold
+    faiss_index = faiss.IndexFlatL2(global_descs[0].shape[1]) 
+    faiss_index.add(global_descs[0])
+    precisions = []
+    recalls = []
+    recalls_top1 = []
+    for i in range(1, len(datasets)):
+        _, predictions = faiss_index.search(global_descs[i], 1)  #top1
+    # eval_start_split_point = 0
+        all_positives = 0
+        tp = 0
+        # fp = 0
+        real_loop = []
+        detected_loop = []
+        for q_idx, pred in enumerate(predictions):
+            for iii in range(len(pred)):
+                # flag_tp = False
+
+                query_idx = q_idx
+                overlap_area = np.empty([0,1])
+                # for hull in datasets[0].hulls:
+                # # for hull in dataset.hulls:
+                #     area = datasets[i].hulls[query_idx].intersection(hull).area
+                #     overlap_area = np.vstack([overlap_area, area])
+                # if np.array([float(datasets[i].covs[query_idx]]))[0] < 40: continue
+                # if float(datasets[i].covs[query_idx][0]) < 10: continue
+                for points in datasets[0].points:
+                    # query_info_list = [{"points": np.array(datasets[i].points[query_idx])}]
+                    # database_info_list = [{"points": np.array(points)}]
+                    p_dis = np.linalg.norm(np.mean(datasets[i].points[query_idx],axis=0) - np.mean(points,axis=0))
+                    if p_dis <= 5:
+                        mean_query = np.mean(datasets[i].points[query_idx],axis=0)
+                        query_info_list = [{"points": datasets[i].points[query_idx]-mean_query}]
+                        database_info_list = [{"points": points-mean_query}]
+                        iou = get_iou_2polys(database_info_list, query_info_list, 300, 300)
+                    else: iou = 0
+                    # area = 5*iou
+                    overlap_area = np.vstack([overlap_area, iou])
+                    # print(out)
+                    # pointsDataBase = np.array(datasets[0].points, np.int32) 
+                    # pointsQuery = np.array(datasets[i].points, np.int32) 
+                    # maskDataBase = np.zeros((100, 100), np.uint8) 
+                    # maskQuery = np.zeros((100, 100), np.uint8) 
+                    # cv2.fillPoly(maskQuery, [datasets[i].points], 1)
+                    # cv2.fillPoly(maskDataBase, [datasets[0].points], 1)
+                # for hull in dataset.hulls:
+                    # area = datasets[i].hulls[query_idx].intersection(hull).area
+                    # overlap_area = np.vstack([overlap_area, area])
+                positives = np.copy(overlap_area)
+                # print(positives)
+                # print(np.where(overlap_area > gt_thres))
+                # print(overlap_area)
+                positives = np.where(overlap_area > 0.0)[0]
+
+                descs_dist = np.linalg.norm(global_descs[i][query_idx] - global_descs[0][pred[iii]])
+                # print(descs_dist)
+                # print(len(positives))
+                if len(positives)>0:
+                    # if flag_all_positives==False:
+                    all_positives+=1
+                    real_loop.append(1)
+                    # print(query_idx, pred[iii], positives)
+                    if pred[iii] in positives:# and flag_tp==False:
+                        tp += 1
+                    # else: 
+                    #     mean_query = np.mean(datasets[i].points[query_idx],axis=0)
+                    #     query_info_list = [{"points": datasets[i].points[query_idx]-mean_query}]
+                    #     database_info_list = [{"points": datasets[0].points[pred[iii]]-mean_query}]
+                    #     iou = get_iou_2polys(database_info_list, query_info_list, 600, 600)
+                    #     # print('0', iou)
+                    #     if iou >0: tp+=1
+                        # print('+++++', query_idx, pred[iii], positives, datasets[i].covs[query_idx])
+                    # else: 
+                    #     mean_query = np.mean(datasets[i].points[query_idx],axis=0)
+                    #     mean_db = np.mean(datasets[0].points[pred[iii]],axis=0)
+                    #     if np.linalg.norm(mean_db-mean_query) < 5: tp += 1
+                        # print('-----', query_idx, pred[iii], positives, np.linalg.norm(mean_db-mean_query))
+
+                        
+                        # flag_tp = True
+                        # print('0', np.linalg.norm(global_descs[query_idx] - global_descs[pred[i]]))
+                else:
+                    real_loop.append(0)
+                detected_loop.append(-descs_dist)
+        print(all_positives, tp)
+        # if all_positives != 0:
+        recall_top1 = tp / all_positives #tp/(tp+fp)
+    # else: 
+    #     recall_top1 = 1000
+        # # 使用zip函数将两个队列打包在一起
+        # combined = list(zip(detected_loop, real_loop))
+        # # 根据queue1的值对combined进行排序
+        # sorted_combined = sorted(combined, key=lambda x: x[0])
+        # # 分离排序后的队列
+        # sorted_queue1 = [item[0] for item in sorted_combined]
+        # sorted_queue2 = [item[1] for item in sorted_combined]
+
+        # print("排序后的队列1:", sorted_queue1)
+        # print("排序后的队列2:", sorted_queue2)
+        # print(len(sorted_queue1), np.sum(sorted_queue2))
+
+
+        precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
+        # print(recall)
+        precisions.append(precision)
+        recalls.append(recall)
+        recalls_top1.append(recall_top1)
+    return recalls, precisions, recalls_top1
         
 def collate_fn(batch):
 
@@ -126,7 +315,7 @@ def collate_fn(batch):
 
 
 class TrainingDataset(data.Dataset):
-    def __init__(self, dataset_path = './datasets/bevplace++_dataset/datasets/', dataset = ['Husky/'], seq=[['CarparkB-mapping-0829']]):#'Corridor-b3', 
+    def __init__(self, dataset_path = './datasets/bevplace++_dataset/datasets/', dataset = ['Husky/'], seq=[['Corridor_with_lift_B3','Corridor_with_lift_B3_0825_local']]):#'Corridor-b3', 
         super().__init__()
         # neg, pos threshold
          
@@ -135,6 +324,7 @@ class TrainingDataset(data.Dataset):
         self.positives = []
         self.negatives = []
         self.hulls = []
+        self.points = []
         # compute pos and negs for each query
         self.num_neg = 10
         for dataset_id in range(len(dataset)):
@@ -157,6 +347,7 @@ class TrainingDataset(data.Dataset):
                     # np.concatenate((self.hulls, poses), axis=0)
                 
                 hull_tmp = []
+                points_tmp = []
                 with open(dataset_path+dataset[dataset_id]+'hull/'+sequence+'.txt', 'r') as file:
                     for line in file:
                         points = line.strip().split(',')
@@ -166,19 +357,36 @@ class TrainingDataset(data.Dataset):
                         polygon = Polygon(vertices)
                         self.hulls.append(polygon)
                         hull_tmp.append(polygon)
+                        self.points.append(points)
+                        points_tmp.append(points)
                     
                 for i in range(len(hull_tmp)):
                     overlap_areas = np.empty(0)
-                    current_polygon = hull_tmp[i]                    
-                    for j in range(len(hull_tmp)):
-                        other_polygon = hull_tmp[j]
-                        overlap_area = current_polygon.intersection(other_polygon).area
-                        overlap_areas = np.append(overlap_areas,overlap_area)
+                    # current_polygon = hull_tmp[i]   
+                    # current_points = points_tmp[i]                 
+                    # for j in range(len(hull_tmp)):
+                    for  j in range(len(points_tmp)):
+                        # other_polygon = hull_tmp[j]
+                        # overlap_area = current_polygon.intersection(other_polygon).area
+                        # overlap_areas = np.append(overlap_areas,overlap_area)
+                        # print(points_tmp[j].shape)
+                        # print(np.mean(points_tmp[j], axis=0))
+                        
+                        p_dis = np.linalg.norm(np.mean(points_tmp[i],axis=0) - np.mean(points_tmp[j],axis=0))
+                        if p_dis <=5:
+                            mean_query = np.mean(points_tmp[i],axis=0)
+                            query_info_list = [{"points": points_tmp[i]-mean_query}]
+                            database_info_list = [{"points": points_tmp[j]-mean_query}]
+                            iou = get_iou_2polys(database_info_list, query_info_list, 300, 300)
+                        else: iou = 0
+                        # area = 5*iou
+                        overlap_areas = np.append(overlap_areas,iou)
+                    # print(overlap_areas)   
                     indexes = np.argsort(overlap_areas)[::-1]
-                    remap_index = len_poses + indexes[np.where(overlap_areas[indexes]>=self.pos_thres)[0]]
+                    remap_index = len_poses + indexes[np.where(overlap_areas[indexes]>0.2)[0]]
                     self.positives.append(np.copy(remap_index))
                     self.positives[-1] = self.positives[-1][1:] #exclude query itself
-                    negs = indexes[np.where(overlap_areas[indexes]<self.neg_thres)[0]]
+                    negs = indexes[np.where(overlap_areas[indexes]==0)[0]]
                     negs = negs+len_poses
                     self.negatives.append(negs)
         # print(len(self.positives))
@@ -202,13 +410,24 @@ class TrainingDataset(data.Dataset):
 
             min_idx = np.where(dis_pos==np.max(dis_pos))[0][0] 
             pos_idx = np.random.choice(self.positives[index], 1)[0]#
-            # pos_idx = self.positives[index][min_idx]
+            # dis_index = np.abs(index - self.positives[index])
+            # max_idx = np.where(dis_index==np.max(dis_index))[0][0]
+            # # print(dis_index, )
+            # # max_idx = np.where(self.positives[index])
+            # pos_idx = self.positives[index][max_idx]
 
             neg_feat = self.h5feat[self.negatives[index].tolist()]
             dis_neg = np.sqrt(np.sum((q_feat.reshape(1,-1)-neg_feat)**2,axis=1))
             
             dis_loss = (-dis_neg) + 0.3
             dis_inc_index_tmp = dis_loss.argsort()[:-self.num_neg-1:-1]
+
+            dis_index = np.abs(index - self.negatives[index])
+            # print(dis_index)
+            dis_inc_index_tmp = dis_index.argsort()[:-self.num_neg-1:-1]
+            # print(dis_inc_index_tmp)
+            # print('******')
+            # neg_idx = np.random.choice(self.negatives[index], self.num_neg)#
 
             neg_idx = self.negatives[index][dis_inc_index_tmp[:self.num_neg]]
 

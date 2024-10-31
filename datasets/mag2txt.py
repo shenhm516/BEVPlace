@@ -13,19 +13,34 @@ parser.add_argument('--bev_save_path', type=str, default="./KITTI_new_imgs/00/im
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    bag_file = args.vel_path +'/2024-08-29-Parkinglot-map-GT.bag'
+    bag_file = args.vel_path +'/2024-08-25-B3-loc-GT.bag'
     bag = rosbag.Bag(bag_file, 'r')
     mag_txt = args.bev_save_path + "/mag_output.txt"
     if os.path.exists(mag_txt):
         os.remove(mag_txt)
-
+    wg_T_wl =np.array([[-4.302238853554692100e-02,-9.990497517432845864e-01,6.976218631714011138e-03,7.080125745248196267e+00],
+                        [9.990501231129520487e-01,-4.306869158799939146e-02,-6.628673540541365865e-03,1.631233456977225771e+01],
+                        [6.922831263764838046e-03,6.684410714340462654e-03,9.999536954582991521e-01,2.127301819800166971e-01],
+                        [0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00]])
+    # wg_T_wl = np.eye(4)
     gt_time = np.empty([0, 1]) 
     gt_rot = np.empty([0, 4])
     gt_pos = np.empty([0, 3])
     for topic, msg, t in bag.read_messages(topics=['/Odometry']):
         gt_time = np.vstack([gt_time, t.to_sec()])
-        gt_rot = np.vstack([gt_rot, np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])]) 
-        gt_pos = np.vstack([gt_pos, np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])])
+        wl_R_b = R.from_quat(np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w]))
+        wl_t_b = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])
+        wl_T_b = np.eye(4)
+        # print(wl_T_b,wl_R_b)
+        wl_T_b[0:3,0:3] = wl_R_b.as_matrix()
+        wl_T_b[0:3,3] = wl_t_b
+        wg_T_b = np.dot(wg_T_wl,wl_T_b)
+        wg_R_b = R.from_matrix(wg_T_b[0:3,0:3])
+        wg_q_b = wg_R_b.as_quat()
+        gt_rot = np.vstack([gt_rot, wg_q_b]) 
+        gt_pos = np.vstack([gt_pos, wg_T_b[0:3,3]])
+        # gt_rot = np.vstack([gt_rot, np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])]) 
+        # gt_pos = np.vstack([gt_pos, np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])])
     slerp = Slerp(gt_time[:,0], R.from_quat(gt_rot))
     for topic, msg, t in bag.read_messages(topics=['/array_1/MagPoints']):#/array_1/MagPoints
         # print(f"Timestamp: {t}, Message: {msg}")

@@ -203,8 +203,9 @@ if __name__ == "__main__":
     min_intensity = 25#np.min(np.linalg.norm(mag_data[:,4:7],axis=1))
     # print(min_intensity, max_intensity)
     pose_path = args.vel_path + "/hull.txt"
-    if os.path.exists(pose_path):
-        os.remove(pose_path)
+    cov_path = args.vel_path + "/cov.txt"
+    if os.path.exists(pose_path): os.remove(pose_path)
+    if os.path.exists(cov_path): os.remove(cov_path)
 
 
     last_pos = np.zeros([3,1])
@@ -223,14 +224,17 @@ if __name__ == "__main__":
             mag_buffer.append(mag_data[row,1:7])
         elif np.linalg.norm(cur_pos-last_pos) > 5:# and time!=last_time:
             mag_buffer_local = np.copy(mag_buffer)
+            intensity_buffer = np.empty(len(mag_buffer))
             for ii in range(len(mag_buffer)):
                 mag_buffer_local[ii][0:3] = mag_buffer[ii][0:3]-mag_buffer[0][0:3]
+                intensity_buffer[ii] = np.linalg.norm(mag_buffer[ii][3:6])
+            # print(np.cov(intensity_buffer))
             
-            
+
             # if tmp_cnt ==0 or tmp_cnt >250: 
             img, ds_points = getBEV(mag_buffer_local)
             ds_points = ds_points + mag_buffer[0][0:3]
-            hull = ConvexHull(ds_points)
+            # hull = ConvexHull(ds_points)
             # print(img.dtype)
             print(args.bev_save_path+'/'+str(write_idx)+".png")
             cv2.imwrite(args.bev_save_path+'/'+str(write_idx)+".png",img)     
@@ -239,10 +243,14 @@ if __name__ == "__main__":
             # print(args.bev_save_path+'/diff' + str(write_idx)+".png")
             # cv2.imwrite(args.bev_save_path+'/diff'+str(write_idx)+".png",img_diff)       
             with open(pose_path, 'a') as f:
-                vertices_str = ','.join([f'{ds_points[v][0]},{ds_points[v][1]}' for v in hull.vertices]) 
+                vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
                 # vertices_str = ','.join([f'{x},{y}' for x, y in hull.vertices]) 
                     
-                f.write(vertices_str + '\n')                
+                f.write(vertices_str + '\n') 
+            with open(cov_path, 'a') as f: 
+                vertices_str = ','.join([f'{np.cov(intensity_buffer)}'])                    
+                f.write(vertices_str + '\n')  
+                            
             write_idx = write_idx+1
 
             cut_index = np.floor(0.2*len(mag_buffer)).astype(int)

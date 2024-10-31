@@ -337,37 +337,62 @@ if __name__ == "__main__":
             
             print('===> Testing')
                 # writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
-            eval_seq =  ['CarparkB-mapping-0829']#,'Corridor-b3'
-            recalls = []
-            precisions = []
-            for seq in eval_seq:
-                test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
-                global_descs = infer(test_set)
-                recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
-                recalls.append(recall_top1)
-                precisions.append(np.mean(precision_mag))
-                # plt.rcParams.update({'font.size': 16})
-                # fig = plt.figure()
-                # plt.plot(recalls_mag, precision_mag)
-                # plt.xlim([0, 1])
-                # plt.ylim([0, 1])
-                # plt.xlabel("Recall [%]")
-                # plt.ylabel("Precision [%]")
-                # plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-                # plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-                # plt.show()
+            eval = True
+            if eval == True:
+                eval_seq = ['Corridor_with_lift_B3','Corridor_with_lift_B3_0825_local']
+                recalls = []
+                precisions = []
+                # F1s = []
+                global_descs = []
+                test_sets = []
+                for seq in eval_seq:
+                    test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
+                    test_sets.append(test_set)
+                    global_desc = infer(test_set)
+                    global_descs.append(global_desc)
+                recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResultsPR(global_descs, test_sets)
+                for iii in range(len(precision_mag)):
 
-            # for seq in eval_seq:
-            # test_set = mag_dataset.InferDataset(seq=eval_seq[0], dataset='Husky/')   
-            # global_descs = infer(test_set)
-        
-            # recalls_mag = mag_dataset.evaluateResults(global_descs, test_set)# (q_descs, db_descs, q_dataset, db_dataset)
-            # _, _, recall_top1 = mag_dataset.evaluateResults(eval_global_descs, eval_datasets)
-        
-            mean_recall = np.mean(recall_top1)
+                    recalls.append(recall_top1[iii])
+                    # print(recalls)
+                    # precisions.append(np.mean(precision_mag[iii]))
 
-            print('===> Mean Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
-            print('===> Mean Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+                    print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+                    # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+                
+                mean_recall = np.mean(recalls)
+            else:
+                eval_seq =  ['Corridor_with_lift_B3_local']#,'Corridor-b3'
+                recalls = []
+                precisions = []
+                for seq in eval_seq:
+                    test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
+                    global_descs = infer(test_set)
+                    recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
+                    recalls.append(recall_top1)
+                    precisions.append(np.mean(precision_mag))
+                    # plt.rcParams.update({'font.size': 16})
+                    # fig = plt.figure()
+                    # plt.plot(recalls_mag, precision_mag)
+                    # plt.xlim([0, 1])
+                    # plt.ylim([0, 1])
+                    # plt.xlabel("Recall [%]")
+                    # plt.ylabel("Precision [%]")
+                    # plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                    # plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                    # plt.show()
+
+                # for seq in eval_seq:
+                # test_set = mag_dataset.InferDataset(seq=eval_seq[0], dataset='Husky/')   
+                # global_descs = infer(test_set)
+            
+                # recalls_mag = mag_dataset.evaluateResults(global_descs, test_set)# (q_descs, db_descs, q_dataset, db_dataset)
+                # _, _, recall_top1 = mag_dataset.evaluateResults(eval_global_descs, eval_datasets)
+            
+                mean_recall = np.mean(recall_top1)
+
+                print('===> Mean Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+                print('===> Mean Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
 
             is_best = mean_recall > best_score 
             if is_best:   best_score = mean_recall
@@ -384,27 +409,85 @@ if __name__ == "__main__":
         writer.close()
 
     elif opt.mode.lower() == 'test':
-        eval_seq =  ['CarparkB-mapping-0829']
+        # eval_seq =  ['CarparkB-loc-0829-easy']
+        # recalls = []
+        # precisions = []
+        # F1s = []
+        # for seq in eval_seq:
+        #     test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
+        #     global_descs = infer(test_set)
+        #     recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
+        #     F1 = [2*((precision_mag[i]*recalls_mag[i])/(precision_mag[i]+recalls_mag[i])) for i in range(len(precision_mag))]            
+        #     F1s.append(np.array(F1).max())
+        #     recalls.append(recall_top1)
+        #     precisions.append(np.mean(precision_mag))
+        #     plt.rcParams.update({'font.size': 16})
+        #     fig = plt.figure()
+        #     plt.plot(recalls_mag, precision_mag)
+        #     plt.xlim([0, 1])
+        #     plt.ylim([0, 1])
+        #     plt.xlabel("Recall [%]")
+        #     plt.ylabel("Precision [%]")
+        #     plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+        #     plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+        #     plt.show()
+        # print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+        # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+
+        # eval_seq = ['CarparkB-mapping-0829-local','CarparkB-loc-0830-hard-local']
+        eval_seq = ['Corridor_with_lift_B3_local']
         recalls = []
         precisions = []
         F1s = []
-        for seq in eval_seq:
-            test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
-            global_descs = infer(test_set)
-            recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
-            F1 = [2*((precision_mag[i]*recalls_mag[i])/(precision_mag[i]+recalls_mag[i])) for i in range(len(precision_mag))]            
-            F1s.append(np.array(F1).max())
-            recalls.append(recall_top1)
-            precisions.append(np.mean(precision_mag))
-            plt.rcParams.update({'font.size': 16})
-            fig = plt.figure()
-            plt.plot(recalls_mag, precision_mag)
-            plt.xlim([0, 1])
-            plt.ylim([0, 1])
-            plt.xlabel("Recall [%]")
-            plt.ylabel("Precision [%]")
-            plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-            plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-            plt.show()
-        print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
-        print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+        global_descs = []
+        test_sets = []
+        eval = False
+        if eval == True:
+            for seq in eval_seq:
+                test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
+                test_sets.append(test_set)
+                global_desc = infer(test_set)
+                global_descs.append(global_desc)
+            recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResultsPR(global_descs, test_sets)
+                # recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
+            # print(len(precision_mag[0]))
+            for iii in range(len(precision_mag)):
+                F1 = [2*((precision_mag[iii][i]*recalls_mag[iii][i])/(precision_mag[iii][i]+recalls_mag[iii][i])) for i in range(len(precision_mag[iii]))]            
+                # print(np.array(F1).max())
+                    # F1s.append(np.array(F1).max())
+                recalls.append(recall_top1[iii])
+                # print(recalls)
+                # precisions.append(np.mean(precision_mag[iii]))
+                plt.rcParams.update({'font.size': 16})
+                fig = plt.figure()
+                plt.plot(recalls_mag[iii], precision_mag[iii])
+                plt.xlim([0, 1])
+                plt.ylim([0, 1])
+                plt.xlabel("Recall [%]")
+                plt.ylabel("Precision [%]")
+                plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                plt.show()
+                print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+                # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+        else:
+            for seq in eval_seq:
+                test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
+                global_descs = infer(test_set)
+                recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
+                F1 = [2*((precision_mag[i]*recalls_mag[i])/(precision_mag[i]+recalls_mag[i])) for i in range(len(precision_mag))]            
+                F1s.append(np.array(F1).max())
+                recalls.append(recall_top1)
+                precisions.append(np.mean(precision_mag))
+                plt.rcParams.update({'font.size': 16})
+                fig = plt.figure()
+                plt.plot(recalls_mag, precision_mag)
+                plt.xlim([0, 1])
+                plt.ylim([0, 1])
+                plt.xlabel("Recall [%]")
+                plt.ylabel("Precision [%]")
+                plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                plt.show()
+            print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+            print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
