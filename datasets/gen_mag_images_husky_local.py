@@ -267,8 +267,6 @@ if __name__ == "__main__":
     last_time = 0
     mag_buffer = []
     write_idx = 0
-    # last_pos_shot = np.zeros([3,1])
-    # tmp_cnt = 0
     for row in range(len(mag_data)):        
         time = mag_data[row,0]
         cur_pos = mag_data[row,1:4]
@@ -295,8 +293,6 @@ if __name__ == "__main__":
             cv2.imwrite(args.bev_save_path+'/'+str(write_idx)+".png",img)    
             with open(pose_path, 'a') as f:
                 vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
-                # vertices_str = ','.join([f'{x},{y}' for x, y in hull.vertices]) 
-                    
                 f.write(vertices_str + '\n') 
             # with open(cov_path, 'a') as f: 
             #     vertices_str = ','.join([f'{np.cov(intensity_buffer)}'])                    
@@ -313,6 +309,4 @@ if __name__ == "__main__":
             continue
         if np.linalg.norm(cur_pos-last_pos) > 0.2:
             mag_buffer.append(mag_data[row,1:7])
-        
-        # last_pos_shot = cur_pos
 exit()

@@ -321,45 +321,53 @@ if __name__ == "__main__":
             train_epoch(epoch, model, train_set)
             
             print('===> Testing')
-            # recalls_psa = []
+            recalls_psa = []
             # precision_psa = []
-            # for seq in ['0325-9-11-singleImg']:
-            #     test_set = dataset_loader.InferDataset(seq, 'PSA/')
-            #     global_descs = infer(test_set)
-            #     recall_top1, precision = dataset_loader.evaluateResults('PSA/', global_descs, None, test_set)
-            #     recalls_psa.append(recall_top1)
-            #     precision_psa.append(precision)
-            #     # writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
+            for seq in ['0325-9-11-new']:
+                test_set = dataset_loader.InferDataset(seq, 'PSA/')
+                global_descs = infer(test_set)
+                recall, precision, recall_top1 = dataset_loader.evaluateResults('PSA/', global_descs, None, test_set)
+                recalls_psa.append(recall_top1)
+                # precision_psa.append(precision)
+                # writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
+                F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
+            # mean_recall = np.mean(recall_top1)
+                mean_precision = np.mean(precision)
+                print('\n################# Recall Precision F1_Score @ top 1 on PSA ########################\n')
+                print('%s: %0.2f %0.2f %0.2f'%(seq, recall_top1*100, mean_precision*100, np.array(F1).max()*100))
 
             recalls_kitti = []
-            precision_kitti = []
+            # precision_kitti = []
             for seq in ['00', '02', '05', '06','08']:
                 test_set = dataset_loader.InferDataset(seq=seq)   
                 global_descs = infer(test_set)
-                recall_top1, precision = dataset_loader.evaluateResults('KITTI/', global_descs, None, test_set)
+                recall, precision, recall_top1 = dataset_loader.evaluateResults('KITTI/', global_descs, None, test_set)
                 recalls_kitti.append(recall_top1)
-                precision_kitti.append(precision)
-                writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
+            #     precision_kitti.append(precision)
+            #     # writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
+                F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
+                print('\n################# Recall Precision F1_Score @ top 1 on KITTI ########################\n')
+                print('%s: %0.2f %0.2f %0.2f'%(seq, recall_top1*100, mean_precision*100, np.array(F1).max()*100))
 
-            eval_seq =  ['2012-01-15', '2012-02-04', '2012-03-17', '2012-06-15', '2012-09-28', '2012-11-16', '2013-02-23']
-            eval_datasets = []
-            eval_global_descs = []
-            for seq in eval_seq:   
+            # eval_seq =  ['2012-01-15', '2012-02-04', '2012-03-17', '2012-06-15', '2012-09-28', '2012-11-16', '2013-02-23']
+            # eval_datasets = []
+            # eval_global_descs = []
+            # for seq in eval_seq:   
 
-                test_set = nclt_dataset.InferDataset(seq=seq)   
-                global_descs = infer(test_set)
-                eval_global_descs.append(global_descs)
-                eval_datasets.append(test_set)
+            #     test_set = nclt_dataset.InferDataset(seq=seq)   
+            #     global_descs = infer(test_set)
+            #     eval_global_descs.append(global_descs)
+            #     eval_datasets.append(test_set)
             
-            recalls_nclt = nclt_dataset.evaluateResults(eval_global_descs, eval_datasets)# (q_descs, db_descs, q_dataset, db_dataset)
-            for ii in range(len(recalls_nclt)):
-                writer.add_scalars('val', {'NCLT_'+eval_seq[ii+1]: recalls_nclt[ii]}, epoch)
-            
-            mean_recall = np.mean(recalls_nclt)
+            # recalls_nclt = nclt_dataset.evaluateResults(eval_global_descs, eval_datasets)# (q_descs, db_descs, q_dataset, db_dataset)
+            # for ii in range(len(recalls_nclt)):
+            #     # writer.add_scalars('val', {'NCLT_'+eval_seq[ii+1]: recalls_nclt[ii]}, epoch)
+            combined_array = np.array(recalls_psa + recalls_kitti)
+            mean_recall = np.mean(combined_array)
 
-            # print('===> Mean Recall on PSA: %0.2f %0.2f'%(np.mean(recalls_psa)*100, np.mean(precision_psa)*100))
-            print('===> Mean Recall on KITTI: %0.2f %0.2f'%(np.mean(recalls_kitti)*100, np.mean(precision_kitti)*100))
-            print('===> Mean Recall on NCLT : %0.2f'%(np.mean(recalls_nclt)*100))
+            # # print('===> Mean Recall on PSA: %0.2f %0.2f'%(np.mean(recalls_psa)*100, np.mean(precision_psa)*100))
+            # print('===> Mean Recall on KITTI: %0.2f %0.2f'%(np.mean(recalls_kitti)*100, np.mean(precision_kitti)*100))
+            # print('===> Mean Recall on NCLT : %0.2f'%(np.mean(recalls_nclt)*100))
 
             is_best = mean_recall > best_score 
             if is_best:   best_score = mean_recall
@@ -376,26 +384,21 @@ if __name__ == "__main__":
         writer.close()
 
     elif opt.mode.lower() == 'test':
-        # print('===> Running evaluation step')        
-        # recalls_psa = []
-        # precision_psa = []
-        # print('====> Extracting Features of PSA and calculating recalls')
-        # eval_seq =  ['0325-9-11-singleImg']#, '02', '05', '06', '08']
-        # for seq in eval_seq:
-        #     test_set = dataset_loader.InferDataset(seq, 'PSA/')
-        #     global_descs = infer(test_set)  #return a very large local feature mat could be very slow
-        #     recall_top1, precision = dataset_loader.evaluateResults('PSA/', global_descs, None, test_set)
-        #     recalls_psa.append(recall_top1) 
-        #     precision_psa.append(precision)
-        # mean_recall = np.mean(recalls_psa)
-        # mean_precision = np.mean(precision_psa)
-        # print('\n################# Recall @ top 1 on PSA ########################\n')
-        # for ii in range(len(eval_seq)):
-        #     print('%s: %0.2f %0.2f'%(eval_seq[ii], recalls_psa[ii]*100, precision_psa[ii]*100))
-        # print('mean: %0.2f %0.2f'%((mean_recall*100), (mean_precision*100)))
-        # print('################# Global Loc Results on PSA ##################\n')
-
-        # print('\n')
+        print('===> Running evaluation step')        
+        recalls_psa = []
+        precision_psa = []
+        print('====> Extracting Features of PSA and calculating recalls')
+        eval_seq =  ['0325-9-11-singleImg']#, '02', '05', '06', '08']
+        for seq in eval_seq:
+            test_set = dataset_loader.InferDataset(seq, 'PSA/')
+            global_descs = infer(test_set)  #return a very large local feature mat could be very slow
+            recall, precision, recall_top1 = dataset_loader.evaluateResults('PSA/', global_descs, None, test_set)
+            F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
+            # mean_recall = np.mean(recall_top1)
+            mean_precision = np.mean(precision)
+            print('\n################# Recall Precision F1_Score @ top 1 on PSA ########################\n')
+            print('%s: %0.2f %0.2f %0.2f'%(seq, recall_top1*100, mean_precision*100, np.array(F1).max()*100))
+            print('\n')
         
         recalls_kitti = []
         precision_kitti = []
@@ -406,30 +409,36 @@ if __name__ == "__main__":
             # print(len(test_set))
             global_descs = infer(test_set)  #return a very large local feature mat could be very slow
             recall, precision, recall_top1 = dataset_loader.evaluateResults('KITTI/', global_descs, None, test_set)
+            F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
+            # mean_recall = np.mean(recall_top1)
+            mean_precision = np.mean(precision)
+            print('\n################# Recall Precision F1_Score @ top 1 on KITTI ########################\n')
+            print('%s: %0.2f %0.2f %0.2f'%(seq, recall_top1*100, mean_precision*100, np.array(F1).max()*100))
+            print('\n')
             # print(recall_top1, precision)
             # recalls_kitti.append(recall_top1)
             # precision_kitti.append(precision)
-        import matplotlib.pyplot as plt
-        plt.clf()
-        plt.rcParams.update({'font.size': 16})
-        fig = plt.figure()
-        plt.plot(recall, precision)
-        plt.xlim([0, 1])
-        plt.ylim([0, 1])
-        plt.xlabel("Recall [%]")
-        plt.ylabel("Precision [%]")
-        plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-        plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-        plt.show()
-        # mean_recall = np.mean(recall_top1)
-        F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
-        # mean_precision = np.mean(precision)
-        print('\n################# Recall @ top 1 on KITTI ########################\n')
-        # for ii in range(len(eval_seq)):
-        #     print('%s: %0.2f %0.2f'%(eval_seq[ii], recalls_kitti[ii]*100, precision_kitti[ii]*100))
+        # # import matplotlib.pyplot as plt
+        # # plt.clf()
+        # # plt.rcParams.update({'font.size': 16})
+        # # fig = plt.figure()
+        # # plt.plot(recall, precision)
+        # # plt.xlim([0, 1])
+        # # plt.ylim([0, 1])
+        # # plt.xlabel("Recall [%]")
+        # # plt.ylabel("Precision [%]")
+        # # plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+        # # plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+        # # plt.show()
+        # # mean_recall = np.mean(recall_top1)
+        # F1 = [2*((precision[i]*recall[i])/(precision[i]+recall[i])) for i in range(len(precision))]
+        # # mean_precision = np.mean(precision)
+        # print('\n################# Recall @ top 1 on KITTI ########################\n')
+        # # for ii in range(len(eval_seq)):
+        # #     print('%s: %0.2f %0.2f'%(eval_seq[ii], recalls_kitti[ii]*100, precision_kitti[ii]*100))
 
-        print('mean: %0.2f %0.2f'%(recall_top1*100, np.array(F1).max()*100))
-        print('################# Global Loc Results on KITTI ##################\n')
+        # print('mean: %0.2f %0.2f'%(recall_top1*100, np.array(F1).max()*100))
+        # print('################# Global Loc Results on KITTI ##################\n')
         # print('Success rate: %0.2f; Mean Trans. Err.: %0.2f; Mean Rot. Err.: %0.2f'%(success_rate*100, mean_trans_err, mean_rot_err))
        
         # print('\n')

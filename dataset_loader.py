@@ -11,7 +11,11 @@ import h5py
 import faiss
 from RANSAC import rigidRansac
 from sklearn.metrics import precision_recall_curve, average_precision_score
+import re
 # kitti_seq_split_points = {"00":3000, "02":3400, "05":1000, "06":600, '08':1000}
+
+def extract_number(s):
+    return int(re.search(r'\d+', s).group())
 
 class InferDataset(data.Dataset):
     def __init__(self, seq, dataset = 'KITTI/', dataset_path = './datasets/bevplace++_dataset/datasets/'):
@@ -19,7 +23,8 @@ class InferDataset(data.Dataset):
 
         # bev path
         imgs_p = os.listdir(dataset_path+dataset+seq+'/bev_imgs/')
-        imgs_p.sort()
+        imgs_p = sorted(imgs_p, key=extract_number)
+        # imgs_p.sort()
         self.imgs_path = [dataset_path+dataset+seq+'/bev_imgs/'+i for i in imgs_p]
 
         # gt_pose
@@ -42,12 +47,6 @@ class InferDataset(data.Dataset):
 
 
 def evaluateResults(dataset_name, global_descs, local_feats, dataset, match_results_save_path=None):
-
-    if match_results_save_path is not None: 
-        os.system('mkdir -p ' + match_results_save_path)
-        all_errs = []
-        local_feats = local_feats.transpose(0,2,3,1)
-
     gt_thres = 5  # gt threshold
     faiss_index = faiss.IndexFlatL2(global_descs.shape[1]) 
     # print(len(global_descs)*0.6)
@@ -96,87 +95,6 @@ def evaluateResults(dataset_name, global_descs, local_feats, dataset, match_resu
                     tp += 1
                     # flag_tp = True
                 # print('0',descs_dist, descs_norm1, descs_norm2)      
-                if match_results_save_path is not None:
-
-                    index = pred[0]
-
-
-                    query_im = dataset[query_idx][0].transpose(1,2,0)*256
-                    db_im = dataset[index][0].transpose(1,2,0)*256
-
-                    query_im = query_im.astype(np.uint8)
-                    db_im = db_im.astype(np.uint8)
-
-                    fast = cv2.FastFeatureDetector_create()
-                    im_side = db_im.shape[0]
-
-                    query_kps = fast.detect(query_im, None)
-                    db_kps = fast.detect(db_im, None)
-
-                    
-                    query_des = [local_feats[query_idx][int(kp.pt[1]),int(kp.pt[0])] for kp in query_kps]
-                    db_des = [local_feats[index][int(kp.pt[1]),int(kp.pt[0])] for kp in db_kps]
-                    
-                    query_des = np.array(query_des)
-                    db_des = np.array(db_des)
-                    
-                    matcher = cv2.BFMatcher()
-                    matches = matcher.knnMatch(query_des, db_des, k=2)
-                    
-                    
-
-                    all_match = [m[0] for m in matches]
-                    points1 = np.float32([query_kps[m.queryIdx].pt for m in all_match]) 
-                    points2 = np.float32([db_kps[m.trainIdx].pt for m in all_match])
-
-                    H, mask, max_csc_num = rigidRansac((np.array([[im_side//2,im_side//2]]-points1)*0.4),(np.array([[im_side//2,im_side//2]]-points2))*0.4)# cv2.findHomography(points1, points2, cv2.RANSAC, 4.0)
-                    
-                    q_pose = dataset.poses[query_idx]
-
-                    q_pose = np.hstack((q_pose[:12].reshape(3,4)[:2,:2], q_pose[:12].reshape(3,4)[:2,3].reshape(-1,1)))
-                    q_pose = np.vstack((q_pose,np.array([[0,0,1]])))
-
-                    db_pose = dataset.poses[index]
-                    db_pose = np.hstack((db_pose[:12].reshape(3,4)[:2,:2], db_pose[:12].reshape(3,4)[:2,3].reshape(-1,1)))
-                    db_pose = np.vstack((db_pose,np.array([[0,0,1]])))
-
-                    relative_gt = np.linalg.inv(db_pose).dot((q_pose))
-                    relative_H = np.vstack((H, np.array([[0,0,1]])))
-                    
-                    err = np.linalg.inv(relative_H).dot(relative_gt)
-                    err_theta = np.abs(np.arctan2(err[0,1], err[0,0])/np.pi*180)
-                    err_trans = np.sqrt(err[0,2]**2+err[1,2]**2)
-
-                    if err_theta>5 or err_trans>2:
-                        print('bug')
-                    all_errs.append([err_trans, err_theta])
-                                
-                    good_match = [all_match[i] for i in range(len(mask)) if  mask[i]]
-                    db_im = db_im*3
-                    db_im[:,:,:2]=0
-
-
-                    im = cv2.drawMatches(query_im.astype(np.uint8), query_kps, db_im.astype(np.uint8), db_kps, good_match, None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-                    
-                    out_im = np.zeros((im.shape[0]*2, db_im.shape[1]*3,3))
-                    out_im[:im.shape[0], :db_im.shape[1]] = query_im
-                    out_im[:im.shape[0], db_im.shape[1]:db_im.shape[1]*2] = db_im
-                    out_im[:im.shape[0], db_im.shape[1]*2:] = db_im+query_im
-
-                    out_im[-im.shape[0]:, :db_im.shape[1]*2] = im
-                    
-
-                    H = relative_H 
-                    mat = cv2.getRotationMatrix2D((query_im.shape[0]//2, query_im.shape[0]//2), np.arctan2(-H[0,1], H[0,0])/np.pi*180, 1.0)
-                    mat[0,2] -= H[1,2]/0.4
-                    mat[1,2] -= H[0,2]/0.4
-                    mat = np.vstack((mat,np.array([[0,0,1]])))
-                    mat = np.linalg.inv(mat)[:2,:]
-                    im_warp = cv2.warpAffine(db_im, mat, query_im.shape[:2])
-
-                    im_warp[:,:,:2]=0
-                    out_im[-im.shape[0]:, db_im.shape[1]*2:db_im.shape[1]*3] = im_warp+query_im                
-                    cv2.imwrite(match_results_save_path+str(1000000+query_idx)[1:]+".png", out_im)
             # elif positives in pred:
             # elif pred[i] in positives and flag_fp == False:
             #     fp += 1
@@ -197,18 +115,9 @@ def evaluateResults(dataset_name, global_descs, local_feats, dataset, match_resu
     else: 
         recall_top1 = 1000
         precision = 1000
-        # print(all_positives)
 
-    if match_results_save_path is not None:
-        all_errs = np.array(all_errs)
-        success_loc = (all_errs[:,0]<2) & (all_errs[:,1]<5)
-        success_rate = np.sum(success_loc)/all_positives
-        mean_trans_err = np.mean(all_errs[success_loc,1])
-        mean_rot_err = np.mean(all_errs[success_loc,0]) 
-        return recall_top1, success_rate, mean_trans_err, mean_rot_err
-    else:
-        precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
-        return recall, precision, recall_top1
+    precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
+    return recall, precision, recall_top1
 
         
 def collate_fn(batch):
@@ -230,7 +139,7 @@ def collate_fn(batch):
 
 
 class TrainingDataset(data.Dataset):
-    def __init__(self, dataset_path = './datasets/bevplace++_dataset/datasets/', dataset = ['KITTI/'], seq=[['00']]):
+    def __init__(self, dataset_path = './datasets/bevplace++_dataset/datasets/', dataset = ['KITTI/', 'PSA/'], seq=[['00'],['0325-9-11-new']]):
         super().__init__()
         # neg, pos threshold
          
@@ -248,7 +157,8 @@ class TrainingDataset(data.Dataset):
             for sequence in seq[dataset_id]:
                 # bev path
                 imgs_p = os.listdir(dataset_path+dataset[dataset_id]+sequence+'/bev_imgs/')
-                imgs_p.sort()                
+                imgs_p = sorted(imgs_p, key=extract_number)
+                # imgs_p.sort()                
                 
                 # gt_pose, only first 3000 frames of KITTI for training
                 poses = np.loadtxt(dataset_path+dataset[dataset_id]+'poses/'+sequence+'.txt')
