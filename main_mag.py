@@ -47,7 +47,7 @@ def get_args():
     parser.add_argument('--weightDecay', type=float, default=0.001, help='Weight decay for SGD.')
     parser.add_argument('--momentum', type=float, default=0.9, help='Momentum for SGD.')
 
-    parser.add_argument('--threads', type=int, default=24, help='Number of threads for each data loader to use')
+    parser.add_argument('--threads', type=int, default=0, help='Number of threads for each data loader to use')
     parser.add_argument('--seed', type=int, default=1024, help='Random seed to use.')
 
 
@@ -95,9 +95,12 @@ def train_epoch(epoch, model, train_set):
         with h5py.File(train_set.cache, mode='w') as h5: 
             pool_size = model.global_feat_dim
 
-            h5feat = h5.create_dataset("features", 
-                    [len(train_set), pool_size], 
-                    dtype=np.float32)
+            h5feat_query = h5.create_dataset("features_query", 
+                                            [len(train_set), pool_size], 
+                                            dtype=np.float32)
+            h5feat_database = h5.create_dataset("features_database", 
+                                                [train_set.len_database(), pool_size], 
+                                                dtype=np.float32)
             training_data_loader = DataLoader(dataset=train_set, num_workers=opt.threads, 
                                             batch_size=opt.batchSize, shuffle=False, 
                                             collate_fn=mag_dataset.collate_fn)
@@ -106,7 +109,13 @@ def train_epoch(epoch, model, train_set):
                     
                     query = query.to(device)
                     _, _, global_descs = model(query)
-                    h5feat[indices, :] = global_descs.detach().cpu().numpy()
+                    h5feat_query[indices, :] = global_descs.detach().cpu().numpy()
+                for database_index in range(train_set.len_database()):
+                    database_img, index = train_set.getDatabaseDes(database_index)
+                    database_img = torch.tensor(database_img).to(device).unsqueeze(0)
+                    _, _, global_descs = model(database_img)
+                    h5feat_database[index, :] = global_descs.detach().cpu().numpy()
+
         train_set.mining=True
         train_set.refreshCache()
         
@@ -155,7 +164,7 @@ def train_epoch(epoch, model, train_set):
         batch_loss = loss.item()
         epoch_loss += batch_loss
         if iteration % 50 == 0 or n_batches <= 10:
-            print("==> Epoch[{}]({}/{}): Loss: {:.4f}".format(epoch, iteration, 
+            print("==> Epoch[{}]({}/{}): Loss: {:.8f}".format(epoch, iteration, 
                 n_batches, batch_loss), flush=True)
             writer.add_scalar('Train/Loss', batch_loss, 
                     ((epoch-1) * n_batches) + iteration)
@@ -164,7 +173,7 @@ def train_epoch(epoch, model, train_set):
     optimizer.zero_grad()    
     avg_loss = epoch_loss / n_batches
 
-    print("===> Epoch {} Complete: Avg. Loss: {:.4f}".format(epoch, avg_loss), 
+    print("===> Epoch {} Complete: Avg. Loss: {:.8f}".format(epoch, avg_loss), 
             flush=True)
     writer.add_scalar('Train/AvgLoss', avg_loss, epoch)
 
@@ -179,7 +188,8 @@ def infer(eval_set, return_local_feats = False):
         all_local_feats = []
         for _, (imgs, _) in enumerate(tqdm(test_data_loader)):            
             imgs = imgs.to(device)
-            _ , local_feat, global_desc = model(imgs)
+            _, local_feat, global_desc = model(imgs)
+            # print(local_feat.shape, global_desc.shape)
             all_global_descs.append(global_desc.detach().cpu().numpy())
             if return_local_feats:
                 all_local_feats.append(local_feat.detach().cpu().numpy())
@@ -339,7 +349,7 @@ if __name__ == "__main__":
                 # writer.add_scalars('val', {'KITTI_'+seq: recall_top1}, epoch)
             eval = True
             if eval == True:
-                eval_seq = ['Corridor_with_lift_B3','Corridor_with_lift_B3_0825_local']
+                eval_seq = ['YunnanGarden-mapping-local','YunnanGarden-false-loc-local']
                 recalls = []
                 precisions = []
                 # F1s = []
@@ -352,12 +362,8 @@ if __name__ == "__main__":
                     global_descs.append(global_desc)
                 recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResultsPR(global_descs, test_sets)
                 for iii in range(len(precision_mag)):
-
-                    recalls.append(recall_top1[iii])
-                    # print(recalls)
-                    # precisions.append(np.mean(precision_mag[iii]))
-
-                    print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+                    # recalls.append(recall_top1[iii])
+                    print('===> Recall on Mag Sensor : %0.2f'%(recall_top1[iii]*100))
                     # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
                 
                 mean_recall = np.mean(recalls)
@@ -389,11 +395,12 @@ if __name__ == "__main__":
                 # recalls_mag = mag_dataset.evaluateResults(global_descs, test_set)# (q_descs, db_descs, q_dataset, db_dataset)
                 # _, _, recall_top1 = mag_dataset.evaluateResults(eval_global_descs, eval_datasets)
             
-                mean_recall = np.mean(recall_top1)
+            
 
                 print('===> Mean Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
                 print('===> Mean Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
-
+            mean_recall = np.mean(recall_top1)
+            # print(mean_recall)
             is_best = mean_recall > best_score 
             if is_best:   best_score = mean_recall
             
@@ -435,13 +442,13 @@ if __name__ == "__main__":
         # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
 
         # eval_seq = ['CarparkB-mapping-0829-local','CarparkB-loc-0830-hard-local']
-        eval_seq = ['Corridor_with_lift_B3_local']
+        eval_seq = ['YunnanGarden-mapping-local', 'YunnanGarden-query-false-loc-local']
         recalls = []
         precisions = []
         F1s = []
         global_descs = []
         test_sets = []
-        eval = False
+        eval = True
         if eval == True:
             for seq in eval_seq:
                 test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
@@ -468,7 +475,7 @@ if __name__ == "__main__":
                 plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
                 plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
                 plt.show()
-                print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
+                print('===> Recall on Mag Sensor : %0.2f'%(recall_top1[iii]*100))
                 # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
         else:
             for seq in eval_seq:

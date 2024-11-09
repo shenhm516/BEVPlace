@@ -77,8 +77,12 @@ cnt = 0
 def getBEV(all_points): #N*3    
     res = 0.05
     points = np.array([point for point in all_points])
-    ds_points = voxel_filter(points, res)
-    mags = ds_points[:,3:6]
+    mag_pos_intensity = np.empty([points.shape[0], 4])
+    mag_pos_intensity[:,0:3] = points[:,0:3]
+    mag_pos_intensity[:,3] = np.linalg.norm(points[:,3:6], axis=1)
+
+    ds_points = voxel_filter(mag_pos_intensity, res)
+    mags = ds_points[:,3]
     mean_ds_points = np.mean(ds_points[:,0:3], axis=0)
     points = ds_points[:,0:3] - mean_ds_points
 
@@ -88,7 +92,7 @@ def getBEV(all_points): #N*3
     global model
 
     if cnt == 0:    
-        model = ExactGPModel(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(np.linalg.norm(mags, axis=1)), likelihood)   
+        model = ExactGPModel(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(mags), likelihood)   
         model.train()
         likelihood.train()
         # Use the adam optimizer
@@ -103,7 +107,7 @@ def getBEV(all_points): #N*3
             # Output from model
             output = model(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])))
             # Calc loss and backprop gradients
-            loss = -mll(output, torch.from_numpy(np.linalg.norm(mags, axis=1)))
+            loss = -mll(output, torch.from_numpy(mags))
             loss.backward()
             print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f   noise: %.3f' % (
                 i + 1, training_iter, loss.item(),
@@ -116,7 +120,7 @@ def getBEV(all_points): #N*3
         likelihood.eval()
         # observed_pred = likelihood(model(torch.from_numpy(np.column_stack([points[:10,1], points[:100,0]]))))
     model.load_state_dict(hyparam)
-    model.set_train_data(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(np.linalg.norm(mags, axis=1)), False)
+    model.set_train_data(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(mags), False)
     cnt += 1
 
 
@@ -134,16 +138,34 @@ def getBEV(all_points): #N*3
     mat_global_image = np.zeros((y_num,x_num))
     mat_global_image_raw = np.zeros((y_num,x_num))
     for i in range(points.shape[0]):
-        y_ind = y_max_ind-np.floor(points[i,1]/res).astype(int)
-        x_ind = x_max_ind-np.floor(points[i,0]/res).astype(int)
+        y_ind = y_max_ind+np.floor(points[i,1]/res).astype(int)
+        x_ind = x_max_ind+np.floor(points[i,0]/res).astype(int)
         if(x_ind>=x_num or y_ind>=y_num or x_ind<0 or y_ind<0): continue
         mat_global_image[y_ind,x_ind] = 1#np.linalg.norm(mags[i,0:3])
-        mat_global_image_raw[y_ind,x_ind] = np.linalg.norm(mags[i,0:3])
+        mat_global_image_raw[y_ind,x_ind] = mags[i]
 
     kernel_size = 10
     kernel = skimage.morphology.disk(kernel_size)
     mat_global_image = cv2.morphologyEx(mat_global_image, cv2.MORPH_CLOSE, kernel)
 
+    global max_intensity
+    global min_intensity
+    
+    mat_global_image_raw1 = mat_global_image_raw
+    # mat_global_image1 = mat_global_image
+    mat_global_image_raw1[np.where(mat_global_image_raw1<min_intensity)] = min_intensity
+    mat_global_image_raw1[np.where(mat_global_image_raw1>max_intensity)] = max_intensity
+    mat_global_image_raw1 = (mat_global_image_raw1-min_intensity)/(max_intensity-min_intensity)
+    kernel_size = 10
+    kernel = skimage.morphology.disk(kernel_size)
+    mat_global_image_raw1 = cv2.morphologyEx(mat_global_image_raw1, cv2.MORPH_CLOSE, kernel)
+    # mat_global_image1[np.where(mat_global_image1<min_intensity)] = min_intensity
+    # mat_global_image1[np.where(mat_global_image1>max_intensity)] = max_intensity
+    # mat_global_image1 = (mat_global_image1-min_intensity)/(max_intensity-min_intensity)
+    cv2.imshow('raw_img',mat_global_image_raw1)
+    # cv2.imshow('gp_img',mat_global_image1)
+    cv2.waitKey(0)
+    
     # print(mat_global_image.shape)
     # height,width = mat_global_image.shape    
     # img_idx = np.empty([0, 4])
@@ -152,7 +174,7 @@ def getBEV(all_points): #N*3
     #         if mat_global_image[y,x] == 1:
     #             img_idx = np.vstack([img_idx, np.array([-res*(y-y_max_ind), -res*(x-x_max_ind), y, x])]) 
     img_id = np.where(mat_global_image==1)
-    img_idx = np.column_stack([-res*(img_id[0]-y_max_ind), -res*(img_id[1]-x_max_ind), img_id[0], img_id[1]])
+    img_idx = np.column_stack([res*(img_id[0]-y_max_ind), res*(img_id[1]-x_max_ind), img_id[0], img_id[1]])
     # print(np.where(mat_global_image==1)[0], np.where(mat_global_image==1)[1])
     # print(img_idx1-img_idx)
 
@@ -167,8 +189,7 @@ def getBEV(all_points): #N*3
     #     mat_global_image[img_idx[i,2].astype(int), img_idx[i,3].astype(int)] = intensity_pre[i]
 
     # max_intensity = 1000
-    global max_intensity
-    global min_intensity
+
     # print(max_intensity, min_intensity)
     # mat_global_image[np.where(mat_global_image>max_intensity)]=max_intensity
     mat_global_image[np.where(mat_global_image<min_intensity)] = min_intensity
@@ -195,16 +216,16 @@ def extract_number(filename):
 if __name__ == "__main__":
 
     args = parser.parse_args()
-    bag_file = args.vel_path +'/2024-08-25-B3-loc-GT.bag'
+    bag_file = args.vel_path +'/2024-08-29-Parkinglot-map-GT.bag'
     bag = rosbag.Bag(bag_file, 'r')
     mag_txt = args.bev_save_path + "/mag_output.txt"
     if os.path.exists(mag_txt):
         os.remove(mag_txt)
-    wg_T_wl =np.array([[-4.302238853554692100e-02,-9.990497517432845864e-01,6.976218631714011138e-03,7.080125745248196267e+00],
-                        [9.990501231129520487e-01,-4.306869158799939146e-02,-6.628673540541365865e-03,1.631233456977225771e+01],
-                        [6.922831263764838046e-03,6.684410714340462654e-03,9.999536954582991521e-01,2.127301819800166971e-01],
-                        [0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00]])
-    # wg_T_wl = np.eye(4)
+    # wg_T_wl =np.array([[9.981518779707461153e-01,5.931425384699309800e-02,-1.321543771751400656e-02,-2.733883898046805427e+00],
+    #                     [-5.927404706485398661e-02,9.982359101545632551e-01,3.413945292309217457e-03,3.014389392240862442e+00],
+    #                     [1.339462011572121851e-02,-2.624303427557354677e-03,9.999068442527478950e-01,-2.590554922107683386e-02],
+    #                     [0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00]])
+    wg_T_wl = np.eye(4)
     gt_time = np.empty([0, 1]) 
     gt_rot = np.empty([0, 4])
     gt_pos = np.empty([0, 3])
@@ -245,7 +266,8 @@ if __name__ == "__main__":
             w_T_m = np.dot(w_T_b,b_T_m)
             with open(mag_txt, 'a') as f:
                 pos_str = ','.join([f'{elem:.6f}' for elem in w_T_m[0:3,3]])
-                mag_str = ','.join([f'{elem:.6f}' for elem in np.array([msg.mag_points[i].magnetic_field.x, msg.mag_points[i].magnetic_field.y, msg.mag_points[i].magnetic_field.z])])
+                w_mag = np.dot(w_T_m[0:3,0:3],np.array([msg.mag_points[i].magnetic_field.x, msg.mag_points[i].magnetic_field.y, msg.mag_points[i].magnetic_field.z]))
+                mag_str = ','.join([f'{elem:.6f}' for elem in w_mag])
                 f.write(str(mag_time) + ',' + pos_str + ',' + mag_str + ',' + str(i) +'\n')
 
 
@@ -277,16 +299,16 @@ if __name__ == "__main__":
             mag_buffer.append(mag_data[row,1:7])
         elif np.linalg.norm(cur_pos-last_pos) > 5:# and time!=last_time:
             mag_buffer_local = np.copy(mag_buffer)
-            intensity_buffer = np.empty(len(mag_buffer))
-            for ii in range(len(mag_buffer)):
-                mag_buffer_local[ii][0:3] = mag_buffer[ii][0:3]-mag_buffer[0][0:3]
-                intensity_buffer[ii] = np.linalg.norm(mag_buffer[ii][3:6])
+            # intensity_buffer = np.empty(len(mag_buffer))
+            # for ii in range(len(mag_buffer)):
+            #     mag_buffer_local[ii][0:3] = mag_buffer[ii][0:3]-mag_buffer[0][0:3]
+                # intensity_buffer[ii] = np.linalg.norm(mag_buffer[ii][3:6])
             # print(np.cov(intensity_buffer))
             
 
             # if tmp_cnt ==0 or tmp_cnt >250: 
             img, ds_points = getBEV(mag_buffer_local)
-            ds_points = ds_points + mag_buffer[0][0:3]
+            # ds_points = ds_points + mag_buffer[0][0:3]
             # hull = ConvexHull(ds_points)
             # print(img.dtype)
             print(args.bev_save_path+'/'+str(write_idx)+".png")
