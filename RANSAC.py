@@ -32,7 +32,7 @@ def rigidRansac(points1, points2):
     for i in range(1000):
         idx1 = np.random.randint(points1.shape[0])
         idx2 = np.random.randint(points1.shape[0])
-        idx3 = np.random.randint(points1.shape[0])
+        # idx3 = np.random.randint(points1.shape[0])
         x = points1[[idx1,idx2], :]
         y = points2[[idx1,idx2], :]
 

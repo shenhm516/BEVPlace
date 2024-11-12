@@ -197,15 +197,24 @@ def evaluateResults(global_descs, dataset, match_results_save_path=None):
     precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
     return recall, precision, recall_top1
 
-def evaluateResultsPR(global_descs, datasets):
-    # gt_thres = 4  # gt threshold
-    faiss_index = faiss.IndexFlatL2(global_descs[0].shape[1]) 
-    # print(global_descs[0])
+def feat_heat_map(data):         
+    heatmap = data.sum(0)/data.shape[0]
+    heatmap = np.maximum(heatmap, 0)
+    heatmap /= np.max(heatmap)
+    heatmap = 1.0 - heatmap # 也可以不写，就是蓝色红色互换的作用
+    heatmap = cv2.resize(heatmap, (101,101)) # (224,224)指的是图像的size，需要resize到原图大小
+    heatmap = np.uint8(255 * heatmap)
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    return heatmap
+
+
+def evaluateResultsPR(datasets, global_descs, local_descs=None):
+    faiss_index = faiss.IndexFlatL2(global_descs[0].shape[1])
     faiss_index.add(global_descs[0])
     precisions = []
     recalls = []
     recalls_top1 = []
-    # positives_buf = []
+    T_est = []
     for i in range(1, len(datasets)):
         _, predictions = faiss_index.search(global_descs[i], 1)  #top1
         all_positives = 0
@@ -227,43 +236,63 @@ def evaluateResultsPR(global_descs, datasets):
                 overlap_area = np.vstack([overlap_area, iou])
             positives = np.copy(overlap_area)
             positives = np.where(overlap_area > 0.0)[0]
-            # positives_.append(positives)
-            # positives_buf.append(positives_)
-            # positives_buf[i-1][query_idx] = positives
 
+            db_img = cv2.imread(datasets[0].imgs_path[pred[0]], -1)
+            query_img = cv2.imread(datasets[i].imgs_path[query_idx], -1)    
+            db_uv = np.where(db_img>0)
+            query_uv = np.where(query_img>0)
             descs_dist = np.linalg.norm(global_descs[i][query_idx] - global_descs[0][pred[0]])
             if len(positives)>0:
                 all_positives+=1
                 real_loop.append(1)
                 if pred[0] in positives:# and flag_tp==False:
                     tp += 1
+                    if local_descs is not None:
+                        local_desc_db = local_descs[0][pred[0]].transpose(1,2,0) #u,v,feat
+                        faiss_index_local = faiss.IndexFlatL2(local_desc_db[db_uv].shape[1]) # dim of local featrue is 128
+                        faiss_index_local.add(np.array(local_desc_db[db_uv], order='C').astype('float32'))
+                        local_desc_query = local_descs[i][query_idx].transpose(1,2,0) #u,v,feat
+                        D_local, predictions_local = faiss_index_local.search(np.array(local_desc_query[query_uv], order='C').astype('float32'), 1)  #top1
+                        q_img_idx_local = np.empty([0,2])
+                        db_img_idx_local = np.empty([0,2])
+                        for q_idx_local, pred_local in enumerate(predictions_local):
+                            if np.sqrt(D_local[q_idx_local])>0.3: continue
+                            q_img_idx_local = np.vstack([q_img_idx_local, np.array([query_uv[0][q_idx_local],query_uv[1][q_idx_local]])])
+                            db_img_idx_local = np.vstack([db_img_idx_local, np.array([db_uv[0][pred_local[0]],db_uv[1][pred_local[0]]])])
+                        H, mask, max_csc_num = rigidRansac(q_img_idx_local,db_img_idx_local)
+                        T_db = np.eye(4)
+                        # print(np.mean(datasets[0].points[pred[0]], axis=0))
+                        T_db[0:2,3] =  np.mean(datasets[0].points[pred[0]], axis=0)
+                        T_q = np.eye(4)
+                        T_q[0:2,0:2] = H[:,0:2]
+                        T_q[0:2,3] = H[:,2]*0.05
+                        T = np.dot(T_db, T_q)
+                        T_est.append(T)
+                        # print((np.mean(datasets[i].points[query_idx],axis=0) - np.mean(datasets[0].points[pred[0]],axis=0)))
+                        # print(H[:,2]*0.05)
+                        # print(T)
+                        # print('*****')
+                    
+                    # db_img = cv2.imread(datasets[0].imgs_path[pred[0]], -1)
+                    # query_img = cv2.imread(datasets[i].imgs_path[query_idx], -1)        
+                    # cv2.imshow('query img', query_img)
+                    # cv2.imshow('db img', db_img)
+                    # heat_map_db = feat_heat_map(local_descs[0][pred[0]])                    
+                    # heat_map_query = feat_heat_map(local_descs[i][query_idx])
+
+                    # cv2.imshow('query', heat_map_query)
+                    # cv2.imshow('db', heat_map_db)
+                    # cv2.waitKey(0)
             else:
                 real_loop.append(0)
             detected_loop.append(-descs_dist)
-        print(all_positives, tp)
-        # if all_positives != 0:
+        # print(all_positives, tp)
         recall_top1 = tp / all_positives #tp/(tp+fp)
-    # else: 
-    #     recall_top1 = 1000
-        # # 使用zip函数将两个队列打包在一起
-        # combined = list(zip(detected_loop, real_loop))
-        # # 根据queue1的值对combined进行排序
-        # sorted_combined = sorted(combined, key=lambda x: x[0])
-        # # 分离排序后的队列
-        # sorted_queue1 = [item[0] for item in sorted_combined]
-        # sorted_queue2 = [item[1] for item in sorted_combined]
-
-        # print("排序后的队列1:", sorted_queue1)
-        # print("排序后的队列2:", sorted_queue2)
-        # print(len(sorted_queue1), np.sum(sorted_queue2))
-
-
         precision, recall, _ = precision_recall_curve(real_loop, detected_loop)
-        # print(recall)
         precisions.append(precision)
         recalls.append(recall)
         recalls_top1.append(recall_top1)
-    return recalls, precisions, recalls_top1
+    return recalls, precisions, recalls_top1, T_est
         
 def collate_fn(batch):
 

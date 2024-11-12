@@ -143,7 +143,7 @@ def getBEV(all_points): #N*3
     
     mat_global_image_raw = np.zeros((y_num,x_num))
     for i in range(points.shape[0]):        
-        y_ind = y_max_ind+np.floor(points[i,1]/res).astype(int)
+        y_ind = y_max_ind-np.floor(points[i,1]/res).astype(int)
         x_ind = x_max_ind+np.floor(points[i,0]/res).astype(int)
         if(x_ind>=x_num or y_ind>=y_num or x_ind<0 or y_ind<0): continue
         mat_global_image_raw[y_ind,x_ind] = mags[i]
@@ -164,7 +164,7 @@ def getBEV(all_points): #N*3
     # print(mat_global_image.shape, y_num, x_num)
     for y in range(y_num):
         for x in range(x_num):
-            img_idx = np.vstack([img_idx, np.array([res*(y-y_max_ind), res*(x-x_max_ind), y, x])]) 
+            img_idx = np.vstack([img_idx, np.array([res*(-y+y_max_ind), res*(x-x_max_ind), y, x])]) 
             # img_idx = np.column_stack([-res*(y-y_max_ind), -res*(x-x_max_ind), y, x])
     # kernel_size = 10
     # kernel = skimage.morphology.disk(kernel_size)
@@ -200,7 +200,7 @@ def getBEV(all_points): #N*3
     mat_global_image[np.where(mat_global_image>max_intensity)] = max_intensity
     mat_global_image = (mat_global_image-min_intensity)/(max_intensity-min_intensity)
     # mat_global_image[np.where(mat_global_image==-min_intensity/(max_intensity-min_intensity))] = 0 
-    mat_global_image = mat_global_image*65535.0
+    mat_global_image = mat_global_image*65535
 
     # mat_global_image_raw = (mat_global_image_raw-min_intensity)/(max_intensity-min_intensity)
     # mat_global_image_raw[np.where(mat_global_image_raw==-min_intensity/(max_intensity-min_intensity))] = 0 
@@ -246,29 +246,29 @@ def generate_custom_colormap():
 def trans_grey_color(img):
     # global max_intensity
     # global min_intensity
-    img = img/65536
+    img = img/65535
     # print(img)
     img_color = np.zeros((img.shape[0],img.shape[1],3))
     for x in range(img.shape[0]):
         for y in range(img.shape[1]):
             # if img[x,y] == 0: continue
             h = img[x,y] * 5.0 + 1.0
-            j = int(np.floor(h))
+            j = np.floor(h)
             f = h - j
             if j % 2 == 0:
                 f = 1 - f
             n = 1 - f
 
             if j <= 1:
-                img_color[x,y] = [n, 0, 1]
+                img_color[x,y] = [1, 0, n] #bgr
             elif j == 2:
-                img_color[x,y] = [0, n, 1]
-            elif j == 3:
-                img_color[x,y] = [0, 1, n]
-            elif j == 4:
-                img_color[x,y] = [n, 1, 0]
-            elif j >= 5:
                 img_color[x,y] = [1, n, 0]
+            elif j == 3:
+                img_color[x,y] = [n, 1, 0]
+            elif j == 4:
+                img_color[x,y] = [0, 1, n]
+            elif j >= 5:
+                img_color[x,y] = [0, n, 1]
     return img_color*255
 
 def trans_grey_color_raw(img):
@@ -290,15 +290,15 @@ def trans_grey_color_raw(img):
             n = 1 - f
 
             if j <= 1:
-                img_color[x,y] = [n, 0, 1]
+                img_color[x,y] = [1, 0, n] #bgr
             elif j == 2:
-                img_color[x,y] = [0, n, 1]
-            elif j == 3:
-                img_color[x,y] = [0, 1, n]
-            elif j == 4:
-                img_color[x,y] = [n, 1, 0]
-            elif j >= 5:
                 img_color[x,y] = [1, n, 0]
+            elif j == 3:
+                img_color[x,y] = [n, 1, 0]
+            elif j == 4:
+                img_color[x,y] = [0, 1, n]
+            elif j >= 5:
+                img_color[x,y] = [0, n, 1]
     return img_color*255
 
 def apply_colormap_to_images(img):
@@ -338,7 +338,7 @@ def extract_number(filename):
 if __name__ == "__main__":
 
     args = parser.parse_args()
-    bag_file = args.vel_path +'/2024-08-29-Parkinglot-map-GT.bag'
+    bag_file = args.vel_path +'/btm_left_yunnan_garden_GT.bag'
     bag = rosbag.Bag(bag_file, 'r')
     mag_txt = args.bev_save_path + "/mag_output.txt"
     if os.path.exists(mag_txt): os.remove(mag_txt)
@@ -367,7 +367,7 @@ if __name__ == "__main__":
         # gt_rot = np.vstack([gt_rot, np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])]) 
         # gt_pos = np.vstack([gt_pos, np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])])
     slerp = Slerp(gt_time[:,0], R.from_quat(gt_rot))
-    for topic, msg, t in bag.read_messages(topics=['/array_1/MagPoints']):#/array_1/MagPoints
+    for topic, msg, t in bag.read_messages(topics=['/mag_array/MagPoints']):#/array_1/MagPoints
         # print(f"Timestamp: {t}, Message: {msg}")
         mag_time = t.to_sec()
         if mag_time < np.min(gt_time[:,0]) or mag_time > np.max(gt_time[:,0]): continue  
@@ -394,16 +394,17 @@ if __name__ == "__main__":
 
 
     mag_data = np.loadtxt(args.bev_save_path +'/mag_output.txt', delimiter=',')
-    mag_data = mag_data[np.logical_and(mag_data[:, 7] >=8,  mag_data[:, 7] <12)]
+    mag_data = mag_data[np.logical_and(mag_data[:, 7] >=0,  mag_data[:, 7] <6)]
     # mag_data[]
     mag_data = mag_data[np.argsort(mag_data[:, 0]),:]
     # print(len(mag_data), np.linalg.norm(mag_data[:,4:7],axis=1))
-    max_intensity = 60#np.max(np.linalg.norm(mag_data[:,4:7],axis=1))
-    min_intensity = 25#np.min(np.linalg.norm(mag_data[:,4:7],axis=1))
+    max_intensity = 45#np.max(np.linalg.norm(mag_data[:,4:7],axis=1))
+    min_intensity = 30#np.min(np.linalg.norm(mag_data[:,4:7],axis=1))
     # print(min_intensity, max_intensity)
     pose_path = args.bev_save_path + "/hull.txt"
-    if os.path.exists(pose_path):
-        os.remove(pose_path)
+    if os.path.exists(pose_path): os.remove(pose_path)
+    tmp_path = args.bev_save_path + "/tmp.txt"
+    if os.path.exists(tmp_path): os.remove(tmp_path)
 
 
     last_pos = np.zeros([3,1])
@@ -446,9 +447,11 @@ if __name__ == "__main__":
             # cv2.imwrite(args.bev_save_path+'/diff'+str(write_idx)+".png",img_diff)       
             with open(pose_path, 'a') as f:
                 vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
-                # vertices_str = ','.join([f'{x},{y}' for x, y in hull.vertices]) 
-                    
-                f.write(vertices_str + '\n')                
+                f.write(vertices_str + '\n')  
+            with open(tmp_path, 'a') as f:                
+                vertices_str = ','.join([f'{np.mean(ds_points[:,0:2],axis=0)[0]},{np.mean(ds_points[:,0:2],axis=0)[1]}'])
+                f.write(vertices_str + '\n')  
+
             write_idx = write_idx+1
 
             cut_index = np.floor(0.2*len(mag_buffer)).astype(int)

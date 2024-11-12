@@ -304,11 +304,6 @@ if __name__ == "__main__":
                             vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
                             f.write(vertices_str + '\n') 
                         write_idx = write_idx+1
-                        # cut_index = np.floor(0.2*len(mag_buffer)).astype(int)
-                        # last_pos = cur_pos
-                        # last_pos = mag_buffer[cut_index][0:3]
-                        # last_time = time
-                        # mag_buffer = mag_buffer[cut_index:]
                         mag_buffer = []
                         break
                     elif row==0:
@@ -317,7 +312,6 @@ if __name__ == "__main__":
                     if np.linalg.norm(cur_pos-last_pos) > 0.2:
                         mag_buffer.append(mag_data[row,1:7])
         else:
-            # print('Hello')
             last_pos = np.zeros([3,1])
             for row in range(len(mag_data)):        
                 time = mag_data[row,0]

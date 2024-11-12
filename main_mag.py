@@ -360,7 +360,7 @@ if __name__ == "__main__":
                     test_sets.append(test_set)
                     global_desc = infer(test_set)
                     global_descs.append(global_desc)
-                recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResultsPR(global_descs, test_sets)
+                recalls_mag, precision_mag, recall_top1, _ = mag_dataset.evaluateResultsPR(test_sets, global_descs)
                 for iii in range(len(precision_mag)):
                     # recalls.append(recall_top1[iii])
                     print('===> Recall on Mag Sensor : %0.2f'%(recall_top1[iii]*100))
@@ -416,6 +416,7 @@ if __name__ == "__main__":
         writer.close()
 
     elif opt.mode.lower() == 'test':
+        # import cv2
         # eval_seq =  ['CarparkB-loc-0829-easy']
         # recalls = []
         # precisions = []
@@ -447,34 +448,73 @@ if __name__ == "__main__":
         precisions = []
         F1s = []
         global_descs = []
+        local_descs = []
         test_sets = []
         eval = True
         if eval == True:
             for seq in eval_seq:
                 test_set = mag_dataset.InferDataset(seq=seq, dataset='Husky/')
                 test_sets.append(test_set)
-                global_desc = infer(test_set)
+                local_desc, global_desc = infer(test_set, True)
+                # tmp = local_desc[0].transpose(1,2,0)
+                # tmp_norm = cv2.applyColorMap(tmp, cv2.COLORMAP_JET)
+
+                # data = local_desc[0]                
+                # heatmap = data.sum(0)/data.shape[0]
+                # heatmap = np.maximum(heatmap, 0)
+                # heatmap /= np.max(heatmap)
+                # heatmap = 1.0 - heatmap # 也可以不写，就是蓝色红色互换的作用
+                # heatmap = cv2.resize(heatmap, (101,101)) # (224,224)指的是图像的size，需要resize到原图大小
+                # heatmap = np.uint8(255 * heatmap)
+                # heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                # cv2.imshow('local feature 0',heatmap)
+                # data = local_desc[100]
+                # heatmap = data.sum(0)/data.shape[0]
+                # heatmap = np.maximum(heatmap, 0)
+                # heatmap /= np.max(heatmap)
+                # heatmap = 1.0 - heatmap # 也可以不写，就是蓝色红色互换的作用
+                # heatmap = cv2.resize(heatmap, (101,101)) # (224,224)指的是图像的size，需要resize到原图大小
+                # heatmap = np.uint8(255 * heatmap)
+                # heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                # tmp_norm = np.linalg.norm(tmp, axis=-1)
+                # print(tmp_norm)
+                # cv2.imshow('local feature 1', heatmap)
+                # cv2.waitKey(0)
+                # print(tmp_norm.shape)
+                # local_desc[0][]
+                # global_desc = infer(test_set)
+                # print(local_desc.shape, global_desc.shape)
                 global_descs.append(global_desc)
-            recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResultsPR(global_descs, test_sets)
-                # recalls_mag, precision_mag, recall_top1 = mag_dataset.evaluateResults(global_descs, test_set)
-            # print(len(precision_mag[0]))
+                local_descs.append(local_desc)
+            recalls_mag, precision_mag, recall_top1, T_est = mag_dataset.evaluateResultsPR(test_sets, global_descs, local_descs)
+            
+            est_traj = np.empty([0,2])
+            for iii in range(len(T_est)):
+                est_traj = np.vstack([est_traj, np.array([T_est[iii][0,3],T_est[iii][1,3]])])
+                # plt.plot(T_est[iii][0,3], T_est[iii][1,3])
+            plt.rcParams.update({'font.size': 16})
+            fig = plt.figure()
+            plt.scatter(est_traj[:,0],est_traj[:,1])
+            plt.xlim([-100, 200])
+            plt.ylim([-100, 200])
+            plt.xlabel("x [m]")
+            plt.ylabel("y [m]")
+                # plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                # plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+            plt.show()
             for iii in range(len(precision_mag)):
                 F1 = [2*((precision_mag[iii][i]*recalls_mag[iii][i])/(precision_mag[iii][i]+recalls_mag[iii][i])) for i in range(len(precision_mag[iii]))]            
-                # print(np.array(F1).max())
-                    # F1s.append(np.array(F1).max())
                 recalls.append(recall_top1[iii])
-                # print(recalls)
-                # precisions.append(np.mean(precision_mag[iii]))
-                plt.rcParams.update({'font.size': 16})
-                fig = plt.figure()
-                plt.plot(recalls_mag[iii], precision_mag[iii])
-                plt.xlim([0, 1])
-                plt.ylim([0, 1])
-                plt.xlabel("Recall [%]")
-                plt.ylabel("Precision [%]")
-                plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-                plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
-                plt.show()
+                # plt.rcParams.update({'font.size': 16})
+                # fig = plt.figure()
+                # plt.plot(recalls_mag[iii], precision_mag[iii])
+                # plt.xlim([0, 1])
+                # plt.ylim([0, 1])
+                # plt.xlabel("Recall [%]")
+                # plt.ylabel("Precision [%]")
+                # plt.xticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                # plt.yticks([0, 0.2, 0.4, 0.6, 0.8, 1.0], ["0", "20", "40", "60", "80", "100"])
+                # plt.show()
                 print('===> Recall on Mag Sensor : %0.2f'%(recall_top1[iii]*100))
                 # print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
         else:
