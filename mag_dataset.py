@@ -32,18 +32,18 @@ class InferDataset(data.Dataset):
         # print(imgs_p)
         imgs_p = sorted(imgs_p, key=extract_number)
         self.imgs_path = [dataset_path+dataset+seq+'/bev_imgs/'+i for i in imgs_p]
-        self.hulls = []
+        # self.hulls = []
         self.points = []
         # self.covs = []
         # gt_hull
         with open(dataset_path+dataset+'hull/'+seq+'.txt', 'r') as file:
             for line in file:
                 points = line.strip().split(',')
-                points = np.array([(float(points[i]), float(points[i+1])) for i in range(0, len(points), 2)])
-                hull = ConvexHull(points)
-                vertices = [(points[v][0], points[v][1]) for v in hull.vertices]
-                polygon = Polygon(vertices)
-                self.hulls.append(polygon)
+                points = np.array([(float(points[i]), float(points[i+1]), float(points[i+2])) for i in range(0, len(points), 3)])
+                # hull = ConvexHull(points)
+                # vertices = [(points[v][0], points[v][1]) for v in hull.vertices]
+                # polygon = Polygon(vertices)
+                # self.hulls.append(polygon)
                 self.points.append(points)
         # with open(dataset_path+dataset+'cov/'+seq+'.txt', 'r') as file:
         #     for line in file:
@@ -262,7 +262,7 @@ def evaluateResultsPR(datasets, global_descs, local_descs=None):
                         H, mask, max_csc_num = rigidRansac(q_img_idx_local,db_img_idx_local)
                         T_db = np.eye(4)
                         # print(np.mean(datasets[0].points[pred[0]], axis=0))
-                        T_db[0:2,3] =  np.mean(datasets[0].points[pred[0]], axis=0)
+                        T_db[0:3,3] =  np.mean(datasets[0].points[pred[0]], axis=0)
                         T_q = np.eye(4)
                         T_q[0:2,0:2] = H[:,0:2]
                         T_q[0:2,3] = H[:,2]*0.05
@@ -357,7 +357,7 @@ class TrainingDataset(data.Dataset):
                 with open(dataset_path+dataset[dataset_id]+'hull/'+sequence+'.txt', 'r') as file:
                     for line in file:
                         points = line.strip().split(',')
-                        points = np.array([(float(points[i]), float(points[i+1])) for i in range(0, len(points), 2)])
+                        points = np.array([(float(points[i]), float(points[i+1]), float(points[i+2])) for i in range(0, len(points), 3)])
                         # hull = ConvexHull(points)
                         # vertices = [(points[v][0], points[v][1]) for v in hull.vertices]
                         # polygon = Polygon(vertices)

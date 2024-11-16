@@ -6,7 +6,10 @@ import json
 from os.path import join, exists, isfile
 from os import makedirs
 import os
+import cv2
 from datetime import datetime
+from mag_msg.msg import MagPointsXYZHT
+from RANSAC import rigidRansac
 
 import torch
 import torch.nn as nn
@@ -29,12 +32,25 @@ import dataset_loader
 import mag_dataset
 import matplotlib.pyplot as plt
 
+#ros
+import rospy
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
+from nav_msgs.msg import Path
+
+from geometry_msgs.msg import Pose, Quaternion
+import time
+from scipy.spatial.transform import Slerp, Rotation as R
+import skimage
+import torch
+import gpytorch
+import threading
 # os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 
 
 def get_args():
     parser = argparse.ArgumentParser(description='BEVPlace++')
-    parser.add_argument('--mode', type=str, default='test', help='Mode', choices=['train', 'test'])
+    parser.add_argument('--mode', type=str, default='test', help='Mode', choices=['train', 'test', 'ros'])
     
     parser.add_argument('--batchSize', type=int, default=2, 
             help='Number of triplets (query, pos, negs). Each triplet consists of 12 images.')
@@ -58,6 +74,7 @@ def get_args():
     parser.add_argument('--load_from', type=str, default='', help='Path to load checkpoint from, for resuming training or testing.')
     parser.add_argument('--ckpt', type=str, default='best', 
             help='Load_from from latest or best checkpoint.', choices=['latest', 'best'])
+    parser.add_argument('--gt_trans', type=str, default='', help='Path to load the global transformation matrix of GT.')
     
 
     opt = parser.parse_args()
@@ -260,6 +277,358 @@ def saveCheckpoint(state, is_best, model_out_path, filename='checkpoint.pth.tar'
         shutil.copyfile(filename, model_out_path+'/'+'model_best.pth.tar')
 
 
+
+def voxel_filter(point_cloud, leaf_size, random=False):
+    filtered_points = []
+    # 计算边界点
+    x_min, y_min, z_min = np.amin(point_cloud[:,0:3], axis=0) #计算x y z 三个维度的最值
+    x_max, y_max, z_max = np.amax(point_cloud[:,0:3], axis=0)
+ 
+    # 计算 voxel grid维度
+    Dx = (x_max - x_min)//leaf_size + 1
+    Dy = (y_max - y_min)//leaf_size + 1
+    # Dz = (z_max - z_min)//leaf_size + 1
+    # print("Dx x Dy x Dz is {} x {} x {}".format(Dx, Dy, Dz))
+ 
+    # 计算每个点的voxel索引
+    h = list()  #h 为保存索引的列表
+    for i in range(len(point_cloud)):
+        hx = (point_cloud[i][0] - x_min)//leaf_size
+        hy = (point_cloud[i][1] - y_min)//leaf_size
+        hz = (point_cloud[i][2] - z_min)//leaf_size
+        h.append(hx + hy*Dx + hz*Dx*Dy)
+    h = np.array(h)
+ 
+    # 筛选点
+    h_indice = np.argsort(h) # 返回h里面的元素按从小到大排序的索引
+    h_sorted = h[h_indice]
+    begin = 0
+    for i in range(len(h_sorted)-1):   # 0~9999
+        if h_sorted[i] == h_sorted[i + 1]:
+            continue
+        else:
+            point_idx = h_indice[begin: i+1]
+            filtered_points.append(np.mean(point_cloud[point_idx], axis=0))
+            begin = i+1
+ 
+    # 把点云格式改成array，并对外返回
+    filtered_points = np.array(filtered_points, dtype=np.float64)
+    return filtered_points
+
+class ExactGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood):
+        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.MaternKernel())
+        # self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel() + gpytorch.kernels.LinearKernel())
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        # covar_x = self.rbf_kernel_module(x) + self.white_noise_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+
+cnt = 0
+res = 0.05
+x_min = -2.5
+y_min = -2.5
+x_max = 2.5 
+y_max = 2.5
+x_min_ind = np.floor(x_min/res).astype(int)
+x_max_ind = np.floor(x_max/res).astype(int)
+y_min_ind = np.floor(y_min/res).astype(int)
+y_max_ind = np.floor(y_max/res).astype(int)
+x_num = x_max_ind-x_min_ind+1
+y_num = y_max_ind-y_min_ind+1
+
+def getBEV(all_points): #N*3    
+
+    points = np.array([point for point in all_points])
+    mag_pos_intensity = np.empty([points.shape[0], 4])
+    mag_pos_intensity[:,0:3] = points[:,1:4]
+    mag_pos_intensity[:,3] = points[:,4]
+
+    global res
+    ds_points = voxel_filter(mag_pos_intensity, res)
+    mags = ds_points[:,3]
+    mean_ds_points = np.mean(ds_points[:,0:3], axis=0)
+    points = ds_points[:,0:3] - mean_ds_points
+
+    global cnt
+    global likelihood
+    global hyparam
+    global model_gp
+
+    if cnt == 0:    
+        model_gp = ExactGPModel(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(mags), likelihood)   
+        model_gp.train()
+        likelihood.train()
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam(model_gp.parameters(), lr=0.1)  # Includes GaussianLikelihood parameters
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model_gp)
+        # this is for running the notebook in our testing framework
+        training_iter = 50
+        for i in range(training_iter):
+            # Zero gradients from previous iteration
+            optimizer.zero_grad()
+            # Output from model
+            output = model_gp(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])))
+            # Calc loss and backprop gradients
+            loss = -mll(output, torch.from_numpy(mags))
+            loss.backward()
+            print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f   noise: %.3f' % (
+                i + 1, training_iter, loss.item(),
+                model_gp.covar_module.base_kernel.lengthscale.item(),
+                model_gp.likelihood.noise.item()
+            ))
+            optimizer.step()
+        hyparam = model_gp.state_dict()
+        model_gp.eval()
+        likelihood.eval()
+        # observed_pred = likelihood(model(torch.from_numpy(np.column_stack([points[:10,1], points[:100,0]]))))
+    model_gp.load_state_dict(hyparam)
+    model_gp.set_train_data(torch.from_numpy(np.column_stack([points[:,1], points[:,0]])), torch.from_numpy(mags), False)
+    cnt += 1
+
+
+    global x_max_ind
+    global y_max_ind
+    global x_num
+    global y_num
+
+    mat_global_image = np.zeros((y_num,x_num))
+    # mat_global_image_raw = np.zeros((y_num,x_num))
+    for i in range(points.shape[0]):
+        y_ind = y_max_ind-np.floor(points[i,1]/res).astype(int)
+        x_ind = x_max_ind+np.floor(points[i,0]/res).astype(int)
+        if(x_ind>=x_num or y_ind>=y_num or x_ind<0 or y_ind<0): continue
+        mat_global_image[y_ind,x_ind] = 1#np.linalg.norm(mags[i,0:3])
+        # mat_global_image_raw[y_ind,x_ind] = mags[i]
+
+    kernel_size = 10
+    kernel = skimage.morphology.disk(kernel_size)
+    mat_global_image = cv2.morphologyEx(mat_global_image, cv2.MORPH_CLOSE, kernel)
+
+    # global max_intensity
+    # global min_intensity
+    max_intensity = 45
+    min_intensity = 30
+
+    img_id = np.where(mat_global_image==1)
+    img_idx = np.column_stack([res*(-img_id[0]+y_max_ind), res*(img_id[1]-x_max_ind), img_id[0], img_id[1]])
+    # print(np.where(mat_global_image==1)[0], np.where(mat_global_image==1)[1])
+    # print(img_idx1-img_idx)
+
+    observed_pred = likelihood(model_gp(torch.from_numpy(img_idx[:,0:2])))
+    intensity_pre = observed_pred.mean.detach().numpy()
+    mat_global_image[img_idx[:,2].astype(int), img_idx[:,3].astype(int)] = intensity_pre
+    
+    # hull = ConvexHull(ds_points[:,0:2])
+    # with torch.no_grad(), gpytorch.settings.fast_pred_var():
+    # observed_pred = likelihood(model(torch.from_numpy(img_idx[:,0:2])))
+    # for i in range(len(img_idx)):
+    #     mat_global_image[img_idx[i,2].astype(int), img_idx[i,3].astype(int)] = intensity_pre[i]
+
+    # max_intensity = 1000
+
+    # print(max_intensity, min_intensity)
+    # mat_global_image[np.where(mat_global_image>max_intensity)]=max_intensity
+    mat_global_image[np.where(mat_global_image<min_intensity)] = min_intensity
+    mat_global_image[np.where(mat_global_image>max_intensity)] = max_intensity
+    mat_global_image = (mat_global_image-min_intensity)/(max_intensity-min_intensity)
+    # mat_global_image[np.where(mat_global_image==-min_intensity/(max_intensity-min_intensity))] = 0 
+    mat_global_image = mat_global_image*65535
+
+    # mat_global_image_raw = (mat_global_image_raw-min_intensity)/(max_intensity-min_intensity)
+    # mat_global_image_raw[np.where(mat_global_image_raw==-min_intensity/(max_intensity-min_intensity))] = 0 
+    # mat_global_image_raw = mat_global_image_raw*65535.0
+
+    # diff = mat_global_image - mat_global_image_raw
+    # diff[mat_global_image_raw == 0] = 0
+    # diff = np.abs(diff)
+
+
+    return mat_global_image.astype(np.uint16), ds_points[:,0:3]
+
+path_msg = Path()
+path_msg.header.frame_id = "world"
+def callback_gt(msg):
+    global path_msg
+    global gt_T_odom
+    T_odom = np.eye(4)
+    T_odom[0:3,0:3] = R.from_quat(np.array([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])).as_matrix()
+    T_odom[0:3,3] = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z])
+    T_gt = np.dot(gt_T_odom,T_odom)
+    path_msg.header.stamp = msg.header.stamp
+    pose = PoseStamped()
+    pose.header.frame_id = "world"
+    pose.header.stamp = msg.header.stamp
+    # 设置点的坐标
+    pose.pose.position.x = T_gt[0,3]
+    pose.pose.position.y = T_gt[1,3]
+    pose.pose.position.z = T_gt[2,3]
+    path_msg.poses.append(pose)
+    global gt_pub
+    gt_pub.publish(path_msg)
+
+mag_msgs = np.empty([0,7])
+def callback_mag_points(msg):
+    global mag_msgs
+    # global mag_times
+    global lock
+    lock.acquire()
+    for mag_id in range(6):
+        mag_msgs = np.vstack([mag_msgs, np.array([msg.header.stamp.to_sec(), \
+                  msg.mag_points[mag_id].position.x, msg.mag_points[mag_id].position.y, msg.mag_points[mag_id].position.z, \
+                  msg.mag_points[mag_id].magnetic_field.x, msg.mag_points[mag_id].magnetic_field.y, msg.mag_points[mag_id].magnetic_field.z])])
+    lock.release()
+    # TODO: MTX
+    # mag_msgs.append(msg)
+    # mag_times = np.vstack([mag_times, msg.header.stamp.to_sec()])
+    # return msg
+
+last_odom_pose = np.zeros(7)
+last_odom_time = 0
+begin_odom_pos = np.zeros(3)
+mag_buffer = []
+# qqq = 0
+def callback_odom(msg):
+    global mag_msgs
+    global begin_odom_pos
+    global last_odom_pose
+    global last_odom_time
+    global mag_buffer
+    global lock
+
+    odom_time = msg.header.stamp.to_sec()
+    cur_pose = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y, msg.pose.pose.position.z, \
+                         msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])
+    if np.array_equal(last_odom_pose, np.zeros(7)): 
+        last_odom_pose = cur_pose
+        last_odom_time = odom_time
+        begin_odom_pos = cur_pose[0:3]
+        return
+    # print(mag_times.shape)
+    if np.linalg.norm(cur_pose[0:3]-last_odom_pose[0:3]) < 0.2: return
+    # print(mag_msgs[:,0].shape)
+    lock.acquire()
+    index = np.where((mag_msgs[:,0]<=odom_time) & (mag_msgs[:,0]>=last_odom_time))[0]
+    lock.release()
+    if len(index)==0: return
+    # print(np.vstack((last_odom_pose[3:], cur_pose[3:])))
+    slerp = Slerp(np.array([last_odom_time, odom_time]), R.from_quat(np.vstack((last_odom_pose[3:], cur_pose[3:]))))
+    interp_quat = slerp(mag_msgs[index,0])
+    interp_pos = np.empty([len(index),3])
+    for j in range(3):
+        interp_pos[:,j] = np.interp(mag_msgs[index,0], np.array([last_odom_time, odom_time]), np.array([last_odom_pose[j], cur_pose[j]]))
+    for idx in index:
+        b_T_m = np.eye(4)
+        b_T_m[0:3,3] = mag_msgs[idx,1:4]
+        b_T_m[1,1] = -1
+        b_T_m[2,2] = -1
+        w_T_b = np.eye(4)
+        idx_odom = np.where(index==idx)
+        # print(interp_quat[idx_odom], interp_pos, cur_pose[0:3])
+        w_T_b[0:3,0:3] = interp_quat[idx_odom].as_matrix()
+        w_T_b[0:3,3] = interp_pos[idx_odom,:]        
+        w_T_m = np.dot(w_T_b,b_T_m)
+        mag_buffer.append(np.array([mag_msgs[idx,0], w_T_m[0,3], w_T_m[1,3], w_T_m[2,3], np.linalg.norm(mag_msgs[idx,4:7])]))
+        # print(mag_buffer[-1][1:4], interp_pos[idx_odom], cur_pose[0:3])
+    lock.acquire()
+    mag_msgs = mag_msgs[(np.max(index)+1):,:]
+    lock.release()
+    last_odom_pose = cur_pose
+    last_odom_time = odom_time
+    
+    if np.linalg.norm(cur_pose[0:3]-begin_odom_pos) > 5:
+        # Generate BEV
+        # global qqq
+        img, ds_points = getBEV(mag_buffer)
+        
+        # cv2.imwrite('/home/cartin/work_shm/bevplace_ws/src/BEVPlace/datasets/PSA_MAG'+'/'+str(qqq)+"_ros.png",img)   
+        # print(qqq)
+        # qqq = qqq+1
+        # if qqq == 129:
+            # cv2.imshow('local feature 1', img)
+            # cv2.waitKey(0)
+        img = (img.astype(np.float32))/65535
+        img_rgb = img[np.newaxis, :, :].repeat(3,0)
+        img_device = torch.tensor(img_rgb).to(device).unsqueeze(0)
+        global model
+        with torch.no_grad():    
+            _, local_feat_query, global_desc_query = model(img_device)
+        global_desc_query = global_desc_query.detach().cpu().numpy()
+        local_feat_query = local_feat_query.detach().cpu().numpy()  
+        global faiss_index   
+        D, predictions = faiss_index.search(global_desc_query, 1)  #top1
+        # print(D)
+
+        for q_idx, pred in enumerate(predictions):
+            db_img = cv2.imread(test_set.imgs_path[pred[0]], -1)
+            query_img = img   
+            db_uv = np.where(db_img>0)
+            query_uv = np.where(query_img>0)
+            # descs_dist = np.linalg.norm(global_desc_query - global_desc[pred[0]])
+            global local_desc
+            local_desc_db = local_desc[pred[0]].transpose(1,2,0) #u,v,feat
+            faiss_index_local = faiss.IndexFlatL2(local_desc_db[db_uv].shape[1]) # dim of local featrue is 128
+            faiss_index_local.add(np.array(local_desc_db[db_uv], order='C').astype('float32'))
+            local_desc_query = local_feat_query[q_idx].transpose(1,2,0) #u,v,feat
+            D_local, predictions_local = faiss_index_local.search(np.array(local_desc_query[query_uv], order='C').astype('float32'), 1)  #top1
+
+            q_img_idx_local = np.empty([0,2])
+            db_img_idx_local = np.empty([0,2])
+            for q_idx_local, pred_local in enumerate(predictions_local):
+                if np.sqrt(D_local[q_idx_local])>0.3: continue
+                q_img_idx_local = np.vstack([q_img_idx_local, np.array([query_uv[0][q_idx_local],query_uv[1][q_idx_local]])])
+                db_img_idx_local = np.vstack([db_img_idx_local, np.array([db_uv[0][pred_local[0]],db_uv[1][pred_local[0]]])])
+            H, mask, max_csc_num = rigidRansac(q_img_idx_local,db_img_idx_local)
+            T_db = np.eye(4)
+            global position_mean
+            global res
+            T_db[0:3,3] =  position_mean[pred[0]] - np.array([x_num/2, y_num/2, 0])*res #Wdb_T_Idb
+            dT_q = np.eye(4) # Idb_T_Iquery
+            dT_q[0:2,0:2] = H[:,0:2]
+            dT_q[0:2,3] = H[:,2]*res
+            # print(H[:,2]*0.05)
+            T = np.dot(T_db, dT_q)
+            mean_ds_points = np.mean(ds_points[:,0:3], axis=0)
+            invT_q = np.eye(4) # Idb_T_Iquery
+            invT_q[0:3,3] = -(mean_ds_points - np.array([x_num/2, y_num/2, 0])*res)
+            T = np.dot(T,invT_q)
+            T_odom = np.eye(4)
+            T_odom[0:3,0:3] = R.from_quat(cur_pose[3:]).as_matrix()
+            T_odom[0:3,3] = cur_pose[0:3]
+            T = np.dot(T,T_odom)
+            # T_est.append(T)
+            # print(H)
+            odom_msg = Odometry()
+            odom_msg.header.stamp = rospy.Time.now()
+            odom_msg.header.frame_id = "world"
+            
+            odom_msg.pose.pose.position.x = T[0, 3]
+            odom_msg.pose.pose.position.y = T[1, 3]
+            odom_msg.pose.pose.position.z = T[2, 3] 
+
+            odom_quat = R.from_matrix(T[0:3,0:3]).as_quat()
+            # print(odom_quat)
+
+            odom_msg.pose.pose.orientation = Quaternion(odom_quat[0], odom_quat[1], odom_quat[2], odom_quat[3])
+            
+            odom_msg.twist.twist.linear.x = 0
+            odom_msg.twist.twist.linear.y = 0
+            odom_msg.twist.twist.angular.z = 0
+            global odom_pub
+            odom_pub.publish(odom_msg)
+        # cv2.imshow('mag img', img)
+        # cv2.waitKey(0)
+        cut_index = np.floor(0.2*len(mag_buffer)).astype(int)
+        begin_odom_pos = mag_buffer[cut_index][1:4]
+        mag_buffer = mag_buffer[cut_index:]
+
 if __name__ == "__main__":
     opt = get_args()
 
@@ -308,6 +677,7 @@ if __name__ == "__main__":
             model.pooling.init_params(clsts, traindescs) 
             model = model.cuda()
 
+    # print(opt.mode.lower())
     if opt.mode.lower() == 'train':
         # preparing tensorboard
         writer = SummaryWriter(log_dir=join(opt.runsPath, datetime.now().strftime('%b%d_%H-%M-%S')))
@@ -538,3 +908,108 @@ if __name__ == "__main__":
                 plt.show()
             print('===> Recall on Mag Sensor : %0.2f'%(np.mean(recalls)*100))
             print('===> Precision on Mag Sensor : %0.2f'%(np.mean(precisions)*100))
+
+    elif opt.mode.lower() == 'ros':
+        # import ipdb
+        rospy.init_node('odometry_publisher')
+        gt_pub = rospy.Publisher('/gt_path', Path, queue_size=10)
+        odom_pub = rospy.Publisher('/estimated_odometry', Odometry, queue_size=10)
+        gt_T_odom = np.genfromtxt(opt.gt_trans, delimiter=',')
+
+        global_descs = []
+        local_descs = []
+        test_set = mag_dataset.InferDataset(seq='YunnanGarden-mapping-local', dataset='Husky/')
+        # eval_set = mag_dataset.InferDataset(seq='YunnanGarden-query-false-loc-local', dataset='Husky/')
+        # test_sets.append(test_set)
+        local_desc, global_desc = infer(test_set, True)
+        
+        # print(global_desc.shape)
+        faiss_index = faiss.IndexFlatL2(global_desc.shape[1])
+        faiss_index.add(global_desc)
+
+        position_mean = []
+        for point in test_set.points:
+            position_mean.append(np.mean(point, axis = 0))
+
+        # ipdb.set_trace()
+        T_est = []
+        model.eval()
+        model.to('cuda')
+        
+        lock = threading.Lock()
+        rospy.Subscriber('/mag_array/MagPoints', MagPointsXYZHT, callback_mag_points, None, None, 1000, True)
+        rospy.Subscriber('/Odometry',  Odometry, callback_odom, None, None, 100, True)
+        rospy.Subscriber('/Odometry',  Odometry, callback_gt, None, None, 100, True)
+        print("Network Prepared. Open Sensor Driver.")
+        # for img_path in eval_set.imgs_path:
+        #     img = cv2.imread(img_path, 0)
+        #     img = (img.astype(np.float32))/256 
+        #     img = img[np.newaxis, :, :].repeat(3,0)
+        #     img = torch.tensor(img).to(device).unsqueeze(0)
+        #     # img = img.to(device)
+                        
+        #     time_log_file = "execution_times_only_first.txt"
+
+        #     with open(time_log_file, "a") as f:
+
+        #         start_time = time.time()
+        #         with torch.no_grad():    
+        #             _, local_feat_query, global_desc_query = model(img)
+        #         first_step_time = time.time()                    
+        #         global_desc_query = global_desc_query.detach().cpu().numpy()
+        #         local_feat_query = local_feat_query.detach().cpu().numpy()                    
+        #         time1 = first_step_time - start_time
+        #         f.write(f" {time1:.6f} \n")
+
+        #     _, predictions = faiss_index.search(global_desc_query, 1)  #top1
+        #     for q_idx, pred in enumerate(predictions):
+        #         db_img = cv2.imread(test_set.imgs_path[pred[0]], -1)
+        #         query_img = cv2.imread(img_path, -1)    
+        #         db_uv = np.where(db_img>0)
+        #         query_uv = np.where(query_img>0)
+        #         descs_dist = np.linalg.norm(global_desc_query - global_desc[pred[0]])
+
+        #         local_desc_db = local_desc[pred[0]].transpose(1,2,0) #u,v,feat
+        #         faiss_index_local = faiss.IndexFlatL2(local_desc_db[db_uv].shape[1]) # dim of local featrue is 128
+        #         faiss_index_local.add(np.array(local_desc_db[db_uv], order='C').astype('float32'))
+        #         local_desc_query = local_feat_query[q_idx].transpose(1,2,0) #u,v,feat
+        #         D_local, predictions_local = faiss_index_local.search(np.array(local_desc_query[query_uv], order='C').astype('float32'), 1)  #top1
+
+        #         q_img_idx_local = np.empty([0,2])
+        #         db_img_idx_local = np.empty([0,2])
+        #         for q_idx_local, pred_local in enumerate(predictions_local):
+        #             if np.sqrt(D_local[q_idx_local])>0.3: continue
+        #             q_img_idx_local = np.vstack([q_img_idx_local, np.array([query_uv[0][q_idx_local],query_uv[1][q_idx_local]])])
+        #             db_img_idx_local = np.vstack([db_img_idx_local, np.array([db_uv[0][pred_local[0]],db_uv[1][pred_local[0]]])])
+        #         H, mask, max_csc_num = rigidRansac(q_img_idx_local,db_img_idx_local)
+        #         T_db = np.eye(4)
+        #         T_db[0:2,3] =  position_mean[pred[0]]
+        #         T_q = np.eye(4)
+        #         T_q[0:2,0:2] = H[:,0:2]
+        #         T_q[0:2,3] = H[:,2]*0.05
+        #         T = np.dot(T_db, T_q)
+        #         T_est.append(T)
+
+        # est_traj = np.empty([0,2])
+        # for iii in range(len(T_est)):
+        #     est_traj = np.vstack([est_traj, np.array([T_est[iii][0,3],T_est[iii][1,3]])])
+
+        # sleep_duration = 0.5
+        # for T in T_est:
+        #     odom_msg = Odometry()
+        #     odom_msg.header.stamp = rospy.Time.now()
+        #     odom_msg.header.frame_id = "world"
+            
+        #     odom_msg.pose.pose.position.x = T[0, 3]
+        #     odom_msg.pose.pose.position.y = T[1, 3]
+        #     odom_msg.pose.pose.position.z = 0 
+
+        #     odom_msg.pose.pose.orientation = Quaternion(0, 0, 0, 1)
+            
+        #     odom_msg.twist.twist.linear.x = 0
+        #     odom_msg.twist.twist.linear.y = 0
+        #     odom_msg.twist.twist.angular.z = 0
+            
+        #     odom_pub.publish(odom_msg)
+        #     time.sleep(sleep_duration)
+        rospy.spin()

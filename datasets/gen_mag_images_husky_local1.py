@@ -138,7 +138,7 @@ def getBEV(all_points): #N*3
     mat_global_image = np.zeros((y_num,x_num))
     mat_global_image_raw = np.zeros((y_num,x_num))
     for i in range(points.shape[0]):
-        y_ind = y_max_ind+np.floor(points[i,1]/res).astype(int)
+        y_ind = y_max_ind-np.floor(points[i,1]/res).astype(int)
         x_ind = x_max_ind+np.floor(points[i,0]/res).astype(int)
         if(x_ind>=x_num or y_ind>=y_num or x_ind<0 or y_ind<0): continue
         mat_global_image[y_ind,x_ind] = 1#np.linalg.norm(mags[i,0:3])
@@ -174,7 +174,7 @@ def getBEV(all_points): #N*3
     #         if mat_global_image[y,x] == 1:
     #             img_idx = np.vstack([img_idx, np.array([-res*(y-y_max_ind), -res*(x-x_max_ind), y, x])]) 
     img_id = np.where(mat_global_image==1)
-    img_idx = np.column_stack([res*(img_id[0]-y_max_ind), res*(img_id[1]-x_max_ind), img_id[0], img_id[1]])
+    img_idx = np.column_stack([res*(-img_id[0]+y_max_ind), res*(img_id[1]-x_max_ind), img_id[0], img_id[1]])
     # print(np.where(mat_global_image==1)[0], np.where(mat_global_image==1)[1])
     # print(img_idx1-img_idx)
 
@@ -224,7 +224,7 @@ if __name__ == "__main__":
     mag_txt = args.bev_save_path + "/mag_output.txt"
     write_idx = 0
     bag_files = ['/btm_left_yunnan_garden_GT', '/btm_right_yunnan_garden_GT','/top_left_yunnan_garden_GT','/top_right_yunnan_garden_GT','/loc_yunnangarden_GT']
-    
+    # bag_files = ['/btm_left_yunnan_garden_GT']
     # bag_files = ['/top_right_yunnan_garden_GT']
     # mag_bag_files = ['/btm_left_2024-10-31-18-52-05', '/btm_right_2024-10-31-19-00-49','/top_left_2024-10-31-18-17-48','/top_right_2024-10-31-18-28-59']
     for iii in range(len(bag_files)):
@@ -301,7 +301,7 @@ if __name__ == "__main__":
                         print(args.bev_save_path+'/'+str(write_idx)+".png")
                         cv2.imwrite(args.bev_save_path+'/'+str(write_idx)+".png",img)    
                         with open(pose_path, 'a') as f:
-                            vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
+                            vertices_str = ','.join([f'{v[0]},{v[1]},{v[2]}' for v in ds_points[:,0:3]])
                             f.write(vertices_str + '\n') 
                         write_idx = write_idx+1
                         mag_buffer = []
@@ -327,7 +327,7 @@ if __name__ == "__main__":
                     print(args.bev_save_path+'/'+str(write_idx)+".png")
                     cv2.imwrite(args.bev_save_path+'/'+str(write_idx)+".png",img)    
                     with open(pose_path, 'a') as f:
-                        vertices_str = ','.join([f'{v[0]},{v[1]}' for v in ds_points[:,0:2]])
+                        vertices_str = ','.join([f'{v[0]},{v[1]},{v[2]}' for v in ds_points[:,0:3]])
                         f.write(vertices_str + '\n') 
                     write_idx = write_idx+1
                     cut_index = np.floor(0.2*len(mag_buffer)).astype(int)
